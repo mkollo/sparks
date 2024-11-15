@@ -20,18 +20,18 @@ if __name__ == "__main__":
     parser.add_argument('--n_epochs', type=int, default=50, help='Number of training epochs')
     parser.add_argument('--test_period', type=int, default=5, help='Test period in number of epochs')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
-    parser.add_argument('--beta', type=float, default=0.1, help='KLD regularisation')
-    parser.add_argument('--batch_size', type=int, default=9, help='Batch size')
+    parser.add_argument('--beta', type=float, default=0., help='KLD regularisation')
+    parser.add_argument('--batch_size', type=int, default=6, help='Batch size')
     parser.add_argument('--num_workers', type=int, default=0, help='For dataloading')
     parser.add_argument('--online', action='store_true', default=False,
                         help='Whether to use the online gradient descent algorithm')
 
     # Encoder parameters
-    parser.add_argument('--latent_dim', type=int, default=64, help='Size of the latent space')
+    parser.add_argument('--latent_dim', type=int, default=3, help='Size of the latent space')
     parser.add_argument('--n_heads', type=int, default=1, help='Number of attention heads')
-    parser.add_argument('--embed_dim', type=int, default=256, help='Size of attention embeddings')
+    parser.add_argument('--embed_dim', type=int, default=64, help='Size of attention embeddings')
     parser.add_argument('--n_layers', type=int, default=0, help='Number of conventional attention layers')
-    parser.add_argument('--dec_type', type=str, default='mlp',
+    parser.add_argument('--dec_type', type=str, default='mlp', choices=['linear', 'mlp', 'deconv'],
                         help='Type of decoder (one of linear, mlp or deconv)')
     parser.add_argument('--output_type', type=str, default='flatten',
                           help='Output architecture for the decoder')
@@ -47,16 +47,15 @@ if __name__ == "__main__":
                         help='Which type of task to perform')
     parser.add_argument('--data_type', type=str, default='ephys', choices=['ephys', 'calcium'],
                         help='Whether to use neuropixels or calcium data')
-    parser.add_argument('--n_neurons', type=int, default=50)
+    parser.add_argument('--n_neurons', type=int, default=100)
     parser.add_argument('--dt', type=float, default=0.006, help='Time sampling period')
     parser.add_argument('--ds', type=int, default=2, help='Frame downsampling factor')
     parser.add_argument('--seed', type=int, default=None, help='random seed for reproducibility')
 
     # sliding
-    parser.add_argument('--block_size', type=int, default=100, help='Dimension of the sliding attention blocks')
+    parser.add_argument('--block_size', type=int, default=10, help='Dimension of the sliding attention blocks')
     parser.add_argument('--window_size', type=int, default=3, help='Size of the sliding window')
     parser.add_argument('--sliding', action='store_true', default=False, help='')
-
 
     args = parser.parse_args()
 
@@ -66,7 +65,7 @@ if __name__ == "__main__":
 
     (train_dataset, test_dataset,
      train_dl, test_dl) = make_pseudomouse_allen_movies_dataset(os.path.join(args.home, "datasets/allen_visual/"),
-                                                                neuron_types=['all'],
+                                                                neuron_types='all',
                                                                 n_neurons=args.n_neurons,
                                                                 dt=args.dt,
                                                                 block=args.block,
@@ -88,8 +87,7 @@ if __name__ == "__main__":
                                                  output_type=args.output_type,
                                                  sliding=args.sliding,
                                                  window_size=args.window_size,
-                                                 block_size=args.block_size,
-                                                 w_pre=0.5).to(args.device)
+                                                 block_size=args.block_size).to(args.device)
 
     if args.mode == 'prediction':
         output_size = 900
@@ -101,7 +99,7 @@ if __name__ == "__main__":
         raise NotImplementedError
 
     decoding_network = get_decoder(output_dim_per_session=output_size * args.tau_f, args=args,
-                                   n_neurons=args.n_neurons, softmax=True if args.mode == 'prediction' else False)
+                                   softmax=True if args.mode == 'prediction' else False)
 
     if args.online:
         args.lr = args.lr / 900

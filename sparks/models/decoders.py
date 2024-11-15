@@ -7,7 +7,7 @@ import torch.nn as nn
 
 def get_decoder(output_dim_per_session: Any,
                 args: Any,
-                n_neurons_per_session: Any = None,
+                n_neurons: Any = None,
                 id_per_sess: Any = None,
                 softmax: bool = False,
                 **kwargs):
@@ -17,30 +17,56 @@ def get_decoder(output_dim_per_session: Any,
     if id_per_sess is None:
         id_per_sess = np.arange(len(output_dim_per_session))
 
+    hid_features = kwargs.get('hid_features', int(np.mean([n_inputs_decoder, np.mean(output_dim_per_session)])))
+
     n_inputs_decoder = args.latent_dim * args.tau_p
     if args.dec_type == 'linear':
         return linear(in_dim=n_inputs_decoder,
                       output_dim_per_session=output_dim_per_session,
                       id_per_sess=id_per_sess,
                       softmax=softmax).to(args.device)
+    elif args.dec_type == 'mlp-tiny':
+        return mlp(in_dim=n_inputs_decoder,
+                   hid_features=[n_neurons // 32, n_neurons // 16],
+                   output_dim_per_session=output_dim_per_session,
+                   id_per_sess=id_per_sess,
+                   softmax=softmax).to(args.device)
+    elif args.dec_type == 'mlp-small':
+        return mlp(in_dim=n_inputs_decoder,
+                   hid_features=[n_neurons // 32, n_neurons // 16],
+                   output_dim_per_session=output_dim_per_session,
+                   id_per_sess=id_per_sess,
+                   softmax=softmax).to(args.device)
+    elif args.dec_type == 'mlp-medium':
+        return mlp(in_dim=n_inputs_decoder,
+                   hid_features=[n_neurons // 32, n_neurons // 16],
+                   output_dim_per_session=output_dim_per_session,
+                   id_per_sess=id_per_sess,
+                   softmax=softmax).to(args.device)
+    elif args.dec_type == 'mlp-large':
+        return mlp(in_dim=n_inputs_decoder,
+                   hid_features=[n_neurons // 32, n_neurons // 16],
+                   output_dim_per_session=output_dim_per_session,
+                   id_per_sess=id_per_sess,
+                   softmax=softmax).to(args.device)
+    elif args.dec_type == 'mlp-xlarge':
+        return mlp(in_dim=n_inputs_decoder,
+                   hid_features=[n_neurons // 32, n_neurons // 16],
+                   output_dim_per_session=output_dim_per_session,
+                   id_per_sess=id_per_sess,
+                   softmax=softmax).to(args.device)
     elif args.dec_type == 'mlp':
-        hid_features = kwargs.get('hid_features', int(np.mean([n_inputs_decoder, np.mean(output_dim_per_session)])))
         return mlp(in_dim=n_inputs_decoder,
                    hid_features=hid_features,
                    output_dim_per_session=output_dim_per_session,
                    id_per_sess=id_per_sess,
                    softmax=softmax).to(args.device)
-    elif args.dec_type == 'deconv':
-        n_neurons_per_session = kwargs.get('n_neurons_per_session', output_dim_per_session)
-        return deconv(latent_dim=args.latent_dim,
-                      tau_p=args.tau_p,
-                      embedding_dim=args.embed_dim,
-                      n_neurons_per_session=n_neurons_per_session,
-                      output_dim_per_session=output_dim_per_session,
-                      id_per_sess=id_per_sess,
-                      softmax=softmax).to(args.device)
+    elif args.dec_type == 'rnn':
+        return rnn(input_size=n_inputs_decoder,
+                   hidden_size=hid_features,
+                   output_size=output_dim_per_session[0]).to(args.device)
     else:
-        raise ValueError("dec_type must be one of: linear, mlp, deconv")
+        raise ValueError("dec_type must be one of: linear, mlp, rnn")
 
 
 class mlp(nn.Module):
@@ -154,92 +180,24 @@ class linear(nn.Module):
             return z
 
 
-class deconv(nn.Module):
-    def __init__(self,
-                 latent_dim: int,
-                 tau_p: int,
-                 embedding_dim: int,
-                 n_neurons_per_session: int,
-                 output_dim_per_session: Any,
-                 id_per_sess: Any = None,
-                 softmax: bool = False) -> None:
+class rnn(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super(rnn, self).__init__()
 
-        """
-        Initialize a deconvolutional neural network.
+        self.hidden_size = hidden_size
+        self.hidden = None
 
-        This network mirrors the architecture of the 'conv' encoder.
-        The last layer has either no activation function or log_softmax.
+        self.i2h = nn.Linear(input_size, hidden_size)
+        self.h2h = nn.Linear(hidden_size, hidden_size)
+        self.h2o = nn.Linear(hidden_size, output_size)
 
-        If the model is trained to encode more than one session via unsupervised learning, the decoder is given
-        one output layer for each to accommodate the varying output dimensions.
+    def forward(self, x_t, sess_id=None):
+        if self.hidden is None:
+            self.hidden = torch.zeros([len(x_t), self.hidden_size]).to(x_t.device)
+        
+        self.hidden = self.i2h(x_t.flatten(1)) + self.h2h(self.hidden)
+        output = self.h2o(self.hidden)
+        return output
 
-        Args:
-            in_dim (int): The input dimension of the MLP.
-            hid_features (Union[int, List[int]]): The number of hidden neurons in the hidden layers.
-            output_dim_per_session (Union[int, List[int]]): The output dimension of the MLP.
-            id_per_sess (Optional[np.array]): Defaults to None, the ids of the sessions corresponding to the
-                                                various output layers.
-            softmax (bool): Defaults to False. If True, apply a log_softmax activation function to the neuron outputs.
-
-        Returns:
-            None
-        """
-
-        super(deconv, self).__init__()
-
-        if not hasattr(output_dim_per_session, '__iter__'):
-            output_dim_per_session = [output_dim_per_session]
-        if id_per_sess is None:
-            id_per_sess = np.arange(len(output_dim_per_session))
-        self.id_per_sess = id_per_sess
-
-        self.in_layer = nn.ModuleList([nn.Linear(tau_p, int(np.ceil(n_neurons / 64)))
-                                        for n_neurons in n_neurons_per_session])
-
-        self.layers = nn.Sequential(nn.ConvTranspose1d(latent_dim, 2 * embedding_dim, kernel_size=1,
-                                               stride=1, padding=0, bias=False),
-                                     nn.ConvTranspose1d(2 * embedding_dim, 2 * embedding_dim, kernel_size=3,
-                                               stride=2, padding=1, output_padding=1, bias=False),
-                                    nn.BatchNorm1d(2 * embedding_dim),
-                                    nn.ReLU6(inplace=True),
-                                    nn.ConvTranspose1d(2 * embedding_dim, 2 * embedding_dim, kernel_size=3,
-                                               stride=4, padding=0, output_padding=1, bias=False),
-                                    nn.BatchNorm1d(2 * embedding_dim),
-                                    nn.ReLU6(inplace=True),
-                                    nn.ConvTranspose1d(2 * embedding_dim, embedding_dim // 2, kernel_size=3,
-                                               stride=4, padding=0, output_padding=1, bias=False),
-                                    nn.BatchNorm1d(embedding_dim // 2),
-                                    nn.ReLU6(inplace=True),
-                                    nn.ConvTranspose1d(embedding_dim // 2, embedding_dim, kernel_size=3,
-                                               stride=2, padding=1, output_padding=1, bias=False),
-                                    nn.BatchNorm1d(embedding_dim),
-                                    )
-
-        self.softmax = softmax
-
-    def forward(self, x, sess_id=0) -> torch.Tensor:
-        if len(self.id_per_sess) > 1:
-            layer_idx = np.where(self.id_per_sess == sess_id)[0][0]
-        else:
-            layer_idx = 0
-
-        x = nn.functional.relu(self.in_layer[layer_idx](x))
-
-        x = self.layers(x).flatten(1)[:, :x.shape[1]]
-
-        if self.softmax:
-            return torch.log_softmax(x, dim=-1)
-        else:
-            return x
-
-
-class Conv2dBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, stride):
-        super(Conv2dBlock, self).__init__()
-        self.layers = nn.Sequential(nn.Conv2d(in_channels, out_channels, kernel_size=3,
-                                              stride=stride, padding=1, bias=False),
-                                    nn.BatchNorm2d(out_channels),
-                                    nn.GELU())
-
-    def forward(self, x):
-        return self.layers(x)
+    def init(self):
+        self.hidden = None

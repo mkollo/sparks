@@ -162,7 +162,7 @@ def test_on_batch(encoder: torch.nn.Module,
                 target = targets[..., t:t + tau_f].reshape(targets.shape[0], -1).to(device)
                 if isinstance(loss_fn, torch.nn.NLLLoss):
                     target = target[:, 0].long()
-                test_loss += loss_fn(decoder_outputs, target).cpu() / T
+                test_loss += loss_fn(decoder_outputs, target).cpu() / (T - tau_f + 1)
         else:
             test_loss = None
 

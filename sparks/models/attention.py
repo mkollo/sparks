@@ -3,6 +3,7 @@ from typing import Union, List
 import numpy as np
 import torch
 from torch.nn import Parameter
+from sparks.models.transformer import MultiheadAttention
 
 
 class HebbianAttentionLayer(torch.nn.Module):
@@ -67,18 +68,17 @@ class HebbianAttentionLayer(torch.nn.Module):
         self.sliding = sliding
         self.window_size = window_size
         self.block_size = block_size
+        self.dt = dt
+        self.tau_s = tau_s
 
         if data_type not in ['ephys', 'calcium']:
             raise NotImplementedError('data_type must be one of ["ephys", "calcium"]')
 
         self.data_type = data_type
-        if data_type == 'ephys':
-            self.dt = dt
-            self.tau_s = tau_s
 
+        if data_type == 'ephys':
             self.pre_trace = None
             self.post_trace = None
-
             self.latent_pre_weight = None
             self.latent_post_weight = None
             self.pre_tau_s = None
@@ -86,8 +86,13 @@ class HebbianAttentionLayer(torch.nn.Module):
             self.init_latent_weights(w_pre, w_post)
 
         if self.sliding:
+            assert (self.window_size * self.block_size) < len(self.neurons), \
+            'Error: block_size * window_size must be < n_neurons'
             w = (self.window_size - 1) // 2
-            self.roll_indices = np.concatenate([np.sort(np.arange((i - 1) * (w * self.block_size), (i + 2) * (w * self.block_size)) % len(self.neurons)) for i in range(len(self.neurons) // self.block_size)])
+            self.roll_indices = np.concatenate([np.sort(np.arange((i - 1) * (w * self.block_size),
+                                                                  (i + 1) * (w * self.block_size) + block_size) 
+                                                                  % len(self.neurons))
+                                                                  for i in range(len(self.neurons) // self.block_size)])
             self.v_proj = torch.nn.Linear(self.window_size * self.block_size, self.embed_dim)
         else:
             self.v_proj = torch.nn.Linear(self.n_total_neurons, self.embed_dim)
@@ -112,23 +117,27 @@ class HebbianAttentionLayer(torch.nn.Module):
             pre_spikes = spikes[:, self.neurons].view(spikes.shape[0], -1, self.block_size, 1)  # [B, N/b, b, 1]
             post_spikes = self.roll(spikes[:, self.neurons])  # [B, N/b, 1, b*w]
 
-            assert post_spikes.shape == torch.Size([spikes.shape[0], spikes.shape[1] // self.block_size, 1, self.block_size * self.window_size])
+            assert post_spikes.shape == torch.Size([spikes.shape[0], spikes.shape[1] // self.block_size, 
+                                                    1, self.block_size * self.window_size])
         else:
-            pre_spikes = spikes.unsqueeze(1)  # [B, N, 1]
-            post_spikes = spikes[:, self.neurons].unsqueeze(2)  # [B, 1, N]
+            pre_spikes = spikes.unsqueeze(1)  # [B, 1, N]
+            post_spikes = spikes[:, self.neurons].unsqueeze(2)  # [B, N, 1]
 
         if self.data_type == 'ephys':
             self.pre_trace_update(pre_spikes)
             self.post_trace_update(post_spikes)
             self.attention = (self.attention
-                              + (torch.mul(self.pre_trace, post_spikes != 0) 
+                              + (torch.mul(self.pre_trace, post_spikes != 0)
                                  - torch.mul(self.post_trace, pre_spikes != 0)).view(spikes.shape[0], 
                                                                                      len(self.neurons), -1))
 
         elif self.data_type == 'calcium':
-            self.attention = self.attention + (pre_spikes - post_spikes).view(spikes.shape[0], len(self.neurons), -1)
+            # self.attention = (self.attention * (1 - self.dt / self.tau_s)
+            #                   + (pre_spikes - post_spikes).view(spikes.shape[0], len(self.neurons), -1))
+            self.attention = (pre_spikes - post_spikes).view(spikes.shape[0], len(self.neurons), -1)
 
         return self.v_proj(self.attention) / np.sqrt(self.n_total_neurons + self.embed_dim)
+
 
     def pre_trace_update(self, pre_spikes: torch.Tensor) -> None:
         """
@@ -141,7 +150,9 @@ class HebbianAttentionLayer(torch.nn.Module):
             None
         """
         self.pre_trace = (self.pre_trace * (1 - self.dt / self.pre_tau_s.exp())
-                          + (pre_spikes * self.latent_pre_weight.exp()))
+                        + (pre_spikes * self.latent_pre_weight.exp()))
+
+
 
     def post_trace_update(self, post_spikes: torch.Tensor) -> None:
         """
@@ -154,7 +165,7 @@ class HebbianAttentionLayer(torch.nn.Module):
             None
         """
         self.post_trace = (self.post_trace * (1 - self.dt / self.post_tau_s.exp())
-                           + (post_spikes * self.latent_post_weight.exp()))
+                            + (post_spikes * self.latent_post_weight.exp()))
 
     def init_latent_weights(self, w_pre: float, w_post: float) -> None:
         """
