@@ -17,9 +17,9 @@ def get_decoder(output_dim_per_session: Any,
     if id_per_sess is None:
         id_per_sess = np.arange(len(output_dim_per_session))
 
+    n_inputs_decoder = args.latent_dim * args.tau_p
     hid_features = kwargs.get('hid_features', int(np.mean([n_inputs_decoder, np.mean(output_dim_per_session)])))
 
-    n_inputs_decoder = args.latent_dim * args.tau_p
     if args.dec_type == 'linear':
         return linear(in_dim=n_inputs_decoder,
                       output_dim_per_session=output_dim_per_session,

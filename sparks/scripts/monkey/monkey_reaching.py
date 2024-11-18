@@ -111,7 +111,7 @@ if __name__ == "__main__":
         if (epoch + 1) % args.test_period == 0:
             test_loss, encoder_outputs, decoder_outputs = test(encoding_network,
                                                                decoding_network,
-                                                               test_dl,
+                                                               [test_dl],
                                                                latent_dim=args.latent_dim,
                                                                tau_p=args.tau_p,
                                                                tau_f=args.tau_f,
