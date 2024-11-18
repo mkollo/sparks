@@ -79,13 +79,10 @@ class HebbianAttentionLayer(torch.nn.Module):
         if data_type == 'ephys':
             self.pre_trace = None
             self.post_trace = None
-            self.v_trace = None
             self.latent_pre_weight = None
             self.latent_post_weight = None
-            self.latent_v_weight = None
             self.pre_tau_s = None
             self.post_tau_s = None
-            self.v_tau_s = None
             self.init_latent_weights(w_pre, w_post)
 
         if self.sliding:
@@ -96,6 +93,9 @@ class HebbianAttentionLayer(torch.nn.Module):
                                                                   (i + 1) * (w * self.block_size) + block_size) 
                                                                   % len(self.neurons))
                                                                   for i in range(len(self.neurons) // self.block_size)])
+            self.v_proj = torch.nn.Linear(self.window_size * self.block_size, self.embed_dim)
+        else:
+            self.v_proj = torch.nn.Linear(self.n_total_neurons, self.embed_dim)
 
     def forward(self, spikes: torch.Tensor) -> torch.Tensor:
         """
@@ -124,45 +124,48 @@ class HebbianAttentionLayer(torch.nn.Module):
             post_spikes = spikes[:, self.neurons].unsqueeze(2)  # [B, N, 1]
 
         if self.data_type == 'ephys':
-            self.pre_trace = self.eligibility_trace_update(self.pre_trace, pre_spikes, self.dt,
-                                                           self.pre_tau_s, self.latent_pre_weight)
-            self.post_trace = self.eligibility_trace_update(self.post_trace, post_spikes, self.dt,
-                                                            self.post_tau_s, self.latent_post_weight)
-            self.v_trace = self.eligibility_trace_update(self.v_trace, post_spikes, self.dt,
-                                                         self.v_tau_s, self.latent_v_weight)
+            self.pre_trace_update(pre_spikes)
+            self.post_trace_update(post_spikes)
             self.attention = (self.attention
                               + (torch.mul(self.pre_trace, post_spikes != 0)
                                  - torch.mul(self.post_trace, pre_spikes != 0)).view(spikes.shape[0], 
                                                                                      len(self.neurons), -1))
 
         elif self.data_type == 'calcium':
+            # self.attention = (self.attention * (1 - self.dt / self.tau_s)
+            #                   + (pre_spikes - post_spikes).view(spikes.shape[0], len(self.neurons), -1))
             self.attention = (pre_spikes - post_spikes).view(spikes.shape[0], len(self.neurons), -1)
 
-        return self.attention @ self.v_trace / np.sqrt(self.n_total_neurons + self.embed_dim)
+        return self.v_proj(self.attention) / np.sqrt(self.n_total_neurons + self.embed_dim)
 
 
-
-    def eligibility_trace_update(self,
-                                 old_trace: torch.Tensor, 
-                                 spikes: torch.Tensor, 
-                                 dt: int,
-                                 log_tau_s: torch.Tensor,
-                                 log_weights: torch.Tensor):
+    def pre_trace_update(self, pre_spikes: torch.Tensor) -> None:
         """
         Update the pre-synaptic eligibility traces.
 
         Args:
-            old_trace (torch.Tensor): Tensor of previous eligibility traces
-            spikes (torch.Tensor): Tensor of pre-synaptic neuron spike activity.
-            dt (int): Recording period
-            tau_s (torch.Tensor): Decay constant
-            log_weights (torch.Tensor): update weights
+            pre_spikes (torch.Tensor): Tensor of pre-synaptic neuron spike activity.
 
         Returns:
-            updated_trace (torch.Tensor)
+            None
         """
-        return old_trace * (1 - dt / log_tau_s.exp()) + spikes * log_weights.exp()
+        self.pre_trace = (self.pre_trace * (1 - self.dt / self.pre_tau_s.exp())
+                        + (pre_spikes * self.latent_pre_weight.exp()))
 
+
+
+    def post_trace_update(self, post_spikes: torch.Tensor) -> None:
+        """
+        Update the post-synaptic eligibility traces.
+
+        Args:
+            post_spikes (torch.Tensor): Tensor of post-synaptic neuron spike activity.
+
+        Returns:
+            None
+        """
+        self.post_trace = (self.post_trace * (1 - self.dt / self.post_tau_s.exp())
+                            + (post_spikes * self.latent_post_weight.exp()))
 
     def init_latent_weights(self, w_pre: float, w_post: float) -> None:
         """
@@ -183,11 +186,8 @@ class HebbianAttentionLayer(torch.nn.Module):
         """
 
         if self.sliding:
-            self.latent_pre_weight = Parameter(torch.zeros(1, 
-                                               self.n_total_neurons // self.block_size, 
-                                               self.block_size, 1))
-            self.latent_post_weight = Parameter(torch.zeros(1, self.n_total_neurons // self.block_size,
-                                                1, self.window_size * self.block_size))
+            self.latent_pre_weight = Parameter(torch.zeros(1, self.n_total_neurons // self.block_size, self.block_size, 1))
+            self.latent_post_weight = Parameter(torch.zeros(1, self.n_total_neurons// self.block_size, 1, self.window_size * self.block_size))
 
             self.pre_tau_s = Parameter(torch.ones(1, self.n_total_neurons // self.block_size,
                                                   self.block_size, 1) * np.log(self.tau_s))
@@ -197,25 +197,20 @@ class HebbianAttentionLayer(torch.nn.Module):
         else:
             self.latent_pre_weight = Parameter(torch.zeros(1, len(self.neurons), self.n_total_neurons))
             self.latent_post_weight = Parameter(torch.zeros(1, len(self.neurons), self.n_total_neurons))
-            self.latent_v_weight = Parameter(torch.zeros(1, len(self.neurons), self.embed_dim))
 
             self.pre_tau_s = Parameter(torch.ones(1, len(self.neurons), self.n_total_neurons) * np.log(self.tau_s))
             self.post_tau_s = Parameter(torch.ones(1, len(self.neurons), self.n_total_neurons) * np.log(self.tau_s))
-            self.v_tau_s = Parameter(torch.ones(1, len(self.neurons), self.embed_dim) * np.log(self.tau_s))
 
         torch.nn.init.normal_(self.latent_pre_weight, mean=np.log(w_pre),
                               std=1 / np.sqrt(len(self.neurons) + self.n_total_neurons))
         torch.nn.init.normal_(self.latent_post_weight, mean=np.log(w_post),
-                              std=1 / np.sqrt(len(self.neurons) + self.n_total_neurons))
-        torch.nn.init.normal_(self.latent_v_weight, mean=np.log(w_pre),
                               std=1 / np.sqrt(len(self.neurons) + self.n_total_neurons))
 
     def roll(self, x):
         if self.window_size == 1:
             return x.view(x.shape[0], x.shape[1] // self.block_size, 1, self.block_size)
         else:
-            return x[:, self.roll_indices].view(x.shape[0], x.shape[1] // self.block_size, 1, 
-                                                self.block_size * self.window_size)
+            return x[:, self.roll_indices].view(x.shape[0], x.shape[1] // self.block_size, 1, self.block_size * self.window_size)
 
     def detach_(self):
         """
@@ -233,18 +228,15 @@ class HebbianAttentionLayer(torch.nn.Module):
         if self.pre_trace.device == torch.device('mps:0'):  # MPS backend doesn't support .detach_()
             self.pre_trace = self.pre_trace.detach()
             self.post_trace = self.post_trace.detach()
-            self.v_trace = self.v_trace.detach()
             self.attention = self.attention.detach()
         else:
             self.pre_trace.detach_()
             self.post_trace.detach_()
-            self.v_trace.detach_()
             self.attention.detach_()
 
     def zero_(self):
         self.pre_trace = 0
         self.post_trace = 0
-        self.v_trace = 0
         self.attention = 0
 
 
