@@ -22,7 +22,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_epochs', type=int, default=200, help='Number of training epochs')
     parser.add_argument('--test_period', type=int, default=5, help='Test period in number of epochs')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
-    parser.add_argument('--beta', type=float, default=0.001, help='KLD regularisation')
+    parser.add_argument('--beta', type=float, default=0.0001, help='KLD regularisation')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
     parser.add_argument('--num_workers', type=int, default=0, help='For dataloading')
     parser.add_argument('--online', action='store_true', default=False,

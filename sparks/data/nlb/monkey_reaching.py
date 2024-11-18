@@ -101,19 +101,10 @@ def make_monkey_reaching_dataset(dataset_path: os.path,
                                               smooth=smooth,
                                               train=True,
                                               normalize_targets=normalize_targets)
+        test_dataset = train_dataset
         train_dl = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-        test_dataset = MonkeyReachingDataset(align_data,
-                                             y_trial_data,
-                                             unique_ids,
-                                             trial_ids,
-                                             mode=mode,
-                                             p_train=0.,
-                                             smooth=smooth,
-                                             train=False,
-                                             normalize_targets=normalize_targets)
-        test_dl = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
-
-
+        test_dl = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=False)
+        
     return train_dataset, test_dataset, train_dl, test_dl
 
 
