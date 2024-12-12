@@ -9,7 +9,7 @@ from sparks.data.allen.utils import sample_correct_unit_ids, load_preprocessed_s
 
 def make_gratings_dataset(data_dir: os.path,
                           n_neurons: int = 50,
-                          neuron_type: str = 'VISp',
+                          neuron_types: str = 'VISp',
                           min_snr: float = 1.5,
                           dt: float = 0.01,
                           num_examples_train: int = 1,
@@ -62,7 +62,7 @@ def make_gratings_dataset(data_dir: os.path,
         DataLoader object for test data.
     """
 
-    all_spikes, units_ids = load_preprocessed_spikes(data_dir, [neuron_type],
+    all_spikes, units_ids = load_preprocessed_spikes(data_dir, neuron_types,
                                                      stim_type='static_gratings', min_snr=min_snr)
 
     desired_conds = [[4791, 4818, 4862, 4863], [4826, 4831, 4838, 4890],
@@ -83,7 +83,7 @@ def make_gratings_dataset(data_dir: os.path,
 
     if target_type == 'class':
         targets = np.arange(len(desired_conds))
-    elif target_type == 'freq':
+    elif (target_type == 'freq') or (target_type == 'unsupervised'):
         targets = [0.02, 0.04, 0.08, 0.16, 0.32, 0.]
     else:
         raise NotImplementedError
@@ -112,7 +112,9 @@ def make_gratings_dataset(data_dir: os.path,
         test_dl = torch.utils.data.DataLoader(dataset_test, batch_size=batch_size, shuffle=False,
                                               num_workers=num_workers)
     else:
-        dataset_test, test_dl = None, None
+        dataset_test = AllenGratingsPseudoMouseDataset(spikes_train, targets_train, correct_units_ids, dt)
+        test_dl = torch.utils.data.DataLoader(dataset_test, batch_size=batch_size, shuffle=False,
+                                              num_workers=num_workers)
 
     return dataset_train, train_dl, dataset_test, test_dl
 

@@ -138,7 +138,6 @@ class HebbianAttentionLayer(torch.nn.Module):
 
         return self.v_proj(self.attention) / np.sqrt(self.n_total_neurons + self.embed_dim)
 
-
     def pre_trace_update(self, pre_spikes: torch.Tensor) -> None:
         """
         Update the pre-synaptic eligibility traces.
@@ -151,8 +150,6 @@ class HebbianAttentionLayer(torch.nn.Module):
         """
         self.pre_trace = (self.pre_trace * (1 - self.dt / self.pre_tau_s.exp())
                         + (pre_spikes * self.latent_pre_weight.exp()))
-
-
 
     def post_trace_update(self, post_spikes: torch.Tensor) -> None:
         """
@@ -186,8 +183,10 @@ class HebbianAttentionLayer(torch.nn.Module):
         """
 
         if self.sliding:
-            self.latent_pre_weight = Parameter(torch.zeros(1, self.n_total_neurons // self.block_size, self.block_size, 1))
-            self.latent_post_weight = Parameter(torch.zeros(1, self.n_total_neurons// self.block_size, 1, self.window_size * self.block_size))
+            self.latent_pre_weight = Parameter(torch.zeros(1, self.n_total_neurons // self.block_size,
+                                                           self.block_size, 1))
+            self.latent_post_weight = Parameter(torch.zeros(1, self.n_total_neurons // self.block_size, 
+                                                            1, self.window_size * self.block_size))
 
             self.pre_tau_s = Parameter(torch.ones(1, self.n_total_neurons // self.block_size,
                                                   self.block_size, 1) * np.log(self.tau_s))
@@ -210,7 +209,8 @@ class HebbianAttentionLayer(torch.nn.Module):
         if self.window_size == 1:
             return x.view(x.shape[0], x.shape[1] // self.block_size, 1, self.block_size)
         else:
-            return x[:, self.roll_indices].view(x.shape[0], x.shape[1] // self.block_size, 1, self.block_size * self.window_size)
+            return x[:, self.roll_indices].view(x.shape[0], x.shape[1] // self.block_size, 
+                                                1, self.block_size * self.window_size)
 
     def detach_(self):
         """

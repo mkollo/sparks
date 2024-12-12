@@ -35,6 +35,8 @@ if __name__ == "__main__":
     parser.add_argument('--tau_p', type=int, default=50, help='Past window size')
     parser.add_argument('--tau_f', type=int, default=1, help='Future window size')
     parser.add_argument('--tau_s', type=float, default=100., help='STDP decay')
+    parser.add_argument('--w_pre', type=float, default=0.1, help='')
+    parser.add_argument('--w_post', type=float, default=0.05, help='')
 
     # Data parameters
     parser.add_argument('--ds', type=int, default=4, help='downsampling factor')
@@ -45,7 +47,7 @@ if __name__ == "__main__":
 
     # Create folder to save results
     args.dt = args.ds / 7.73
-    make_res_folder('mec_prediction_ca', os.getcwd(), args)
+    make_res_folder('mec_' + args.mode + '_ca', os.getcwd(), args)
 
     data_path = os.path.join(args.home, 'datasets/mec/calcium_activity_matrix_60584_session17.mat')
     if args.mode == 'prediction':
@@ -78,7 +80,9 @@ if __name__ == "__main__":
                                                  tau_s_per_sess=args.tau_s,
                                                  dt_per_sess=args.dt,
                                                  n_layers=args.n_layers,
-                                                 n_heads=args.n_heads).to(args.device)
+                                                 n_heads=args.n_heads,
+                                                 w_pre=args.w_pre,
+                                                 w_post=args.w_post).to(args.device)
 
     decoding_network = get_decoder(output_dim_per_session=input_size * args.tau_f, args=args)
 

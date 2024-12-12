@@ -63,11 +63,10 @@ def make_npx_dataset(data_dir: os.path,
         DataLoader for testing data.
     """
 
-    all_spikes, units_ids = load_preprocessed_spikes(data_dir, neuron_types,
-                                                     stim_type='natural_movie_one', min_snr=min_snr)
-
-    # Randomly sample units from preprocessed recording
-    correct_units_ids = sample_correct_unit_ids(units_ids, n_neurons, seed, correct_units_ids=correct_units_ids)
+    all_spikes, correct_units_ids = load_preprocessed_spikes(data_dir, neuron_types,
+                                                             stim_type='natural_movie_one', min_snr=min_snr,
+                                                             n_neurons=n_neurons, seed=seed,
+                                                             correct_units_ids=correct_units_ids)
 
     if mode == 'reconstruction':
         from allensdk.brain_observatory.ecephys.ecephys_project_cache import EcephysProjectCache

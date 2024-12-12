@@ -110,6 +110,7 @@ class HebbianTransformerEncoder(nn.Module):
                  dt_per_sess: Union[float, List[float]],
                  n_layers: int = 0,
                  output_type: str = 'flatten',
+                 share_outputs=False,
                  n_heads: int = 1,
                  id_per_sess: Optional[np.array] = None,
                  neurons_per_sess: Optional[Union[Any, List[Any]]] = None,
@@ -176,6 +177,7 @@ class HebbianTransformerEncoder(nn.Module):
         self.id_per_sess = id_per_sess
 
         self.output_type = output_type
+        self.share_outputs = share_outputs
         self.latent_dim = latent_dim
         self.embed_dim = embed_dim
         self.n_heads = n_heads
@@ -216,8 +218,12 @@ class HebbianTransformerEncoder(nn.Module):
         self.fc_mu_per_sess = None
         self.fc_var_per_sess = None
         self.norm_per_sess = None
-        self.init_weights(n_neurons_per_sess)
 
+        if share_outputs:
+            assert (np.array(n_neurons_per_sess) == n_neurons_per_sess[0]).all(), 'Outputs can only be shared if all layers have the same number of neurons'
+            self.init_weights(n_neurons_per_sess[:1])
+        else:            
+            self.init_weights(n_neurons_per_sess)
 
     def forward(self, x: torch.Tensor, sess_id: int = 0) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -239,15 +245,20 @@ class HebbianTransformerEncoder(nn.Module):
         """
 
         layer_idx = np.where(self.id_per_sess == sess_id)[0][0]
+        if self.share_outputs:
+            output_layer_idx = 0
+        else:
+            output_layer_idx = layer_idx
+
         x = self.hebbian_attn_blocks[layer_idx](x)
 
         for block in self.conventional_blocks:
             x = block(x)
         
-        x = self.proj[layer_idx](x)
-        x = self.norm_per_sess[layer_idx](x)
-        mu = self.fc_mu_per_sess[layer_idx](x)
-        logvar = self.fc_var_per_sess[layer_idx](x)
+        x = self.proj[output_layer_idx](x)
+        x = self.norm_per_sess[output_layer_idx](x)
+        mu = self.fc_mu_per_sess[output_layer_idx](x)
+        logvar = self.fc_var_per_sess[output_layer_idx](x)
 
         return mu, logvar
 

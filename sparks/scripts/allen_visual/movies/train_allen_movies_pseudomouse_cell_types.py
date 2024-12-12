@@ -3,10 +3,12 @@ import os
 
 import numpy as np
 import torch
+import tqdm
 
+from sparks.utils.misc import LongCycler
 from sparks.data.allen.movies_pseudomouse import make_pseudomouse_allen_movies_dataset
 from sparks.scripts.allen_visual.movies.utils.test import test
-from sparks.scripts.allen_visual.movies.utils.train import train
+from sparks.scripts.allen_visual.movies.utils.train import train, train_on_batch
 from sparks.models.decoders import get_decoder
 from sparks.models.encoders import HebbianTransformerEncoder
 from sparks.utils.misc import make_res_folder, save_results
@@ -59,29 +61,38 @@ if __name__ == "__main__":
     parser.add_argument('--window_size', type=int, default=3, help='Size of the sliding window')
     parser.add_argument('--sliding', action='store_true', default=False, help='')
 
-
     args = parser.parse_args()
 
     # Create folder to save results
-    make_res_folder('allen_movies_pseudomouse_' + args.data_type + '_' + args.mode + '_nneurons_' + str(args.n_neurons),
+    make_res_folder('allen_movies_pseudomouse_cell_types_' + args.data_type + '_' + args.mode + '_nneurons_' + str(args.n_neurons),
                     os.getcwd(), args)
 
     neuron_types = ['VISp', 'VISal', 'VISrl', 'VISpm', 'VISam', 'VISl']
-    (train_dataset, test_dataset,
-     train_dl, test_dl) = make_pseudomouse_allen_movies_dataset(os.path.join(args.home, "datasets/allen_visual/"),
-                                                                neuron_types=neuron_types,
-                                                                n_neurons=args.n_neurons,
-                                                                dt=args.dt,
-                                                                block=args.block,
-                                                                batch_size=args.batch_size,
-                                                                num_workers=args.num_workers,
-                                                                mode=args.mode,
-                                                                ds=args.ds,
-                                                                seed=args.seed)
-    np.save(args.results_path + '/good_units_ids.npy', train_dataset.good_units_ids)
+    train_datasets = []
+    test_datasets = []
+    train_dls = []
+    test_dls = []
 
-    input_size = len(train_dataset.good_units_ids)  # n_neurons * len(neuron_types)
-    encoding_network = HebbianTransformerEncoder(n_neurons_per_sess=input_size,
+    for neuron_type in neuron_types:
+        (train_dataset, test_dataset,
+        train_dl, test_dl) = make_pseudomouse_allen_movies_dataset(os.path.join(args.home, "datasets/allen_visual/"),
+                                                                    neuron_types=[neuron_type],
+                                                                    n_neurons=args.n_neurons,
+                                                                    dt=args.dt,
+                                                                    block=args.block,
+                                                                    batch_size=args.batch_size,
+                                                                    num_workers=args.num_workers,
+                                                                    mode=args.mode,
+                                                                    ds=args.ds,
+                                                                    seed=args.seed)
+
+        train_datasets.append(train_dataset)
+        test_datasets.append(test_dataset)
+        train_dls.append(train_dl)
+        test_dls.append(test_dl)
+        np.save(args.results_path + '/good_units_ids_%s.npy' % neuron_type, train_dataset.good_units_ids)
+
+    encoding_network = HebbianTransformerEncoder(n_neurons_per_sess=args.n_neurons,
                                                  embed_dim=args.embed_dim,
                                                  latent_dim=args.latent_dim,
                                                  tau_s_per_sess=args.tau_s,
@@ -96,16 +107,16 @@ if __name__ == "__main__":
                                                  w_post=args.w_post).to(args.device)
 
     if args.mode == 'prediction':
-        output_size = 900
+        output_size = 900 * args.tau_f
     elif args.mode == 'reconstruction':
-        output_size = np.prod(train_dataset.true_frames.shape[:-1])
+        output_size = np.prod(train_dataset.true_frames.shape[:-1]) * args.tau_f
     elif args.mode == 'unsupervised':
-        output_size = input_size
+        output_size = args.n_neurons * args.tau_f
     else:
         raise NotImplementedError
 
-    decoding_network = get_decoder(output_dim_per_session=output_size * args.tau_f, args=args,
-                                   n_neurons=args.n_neurons, softmax=True if args.mode == 'prediction' else False)
+    decoding_network = get_decoder(output_dim_per_session=output_size, args=args,
+                                   softmax=True if args.mode == 'prediction' else False)
 
     if args.online:
         args.lr = args.lr / 900
@@ -121,23 +132,36 @@ if __name__ == "__main__":
     best_test_acc = -np.inf
 
     for epoch in range(args.n_epochs):
-        train(encoder=encoding_network, decoder=decoding_network, train_dls=[train_dl],
-              true_frames=test_dataset.true_frames, loss_fn=loss_fn,
-              optimizer=optimizer, latent_dim=args.latent_dim, tau_p=args.tau_p, mode=args.mode,
-              tau_f=args.tau_f, device=args.device, dt=args.dt, online=args.online, beta=args.beta)
+        random_order = np.random.choice(np.arange(len(train_dls)), size=len(train_dls), replace=False)
+        train_iterator = LongCycler([train_dls[i] for i in random_order])
+
+        for i, (inputs, targets) in enumerate(tqdm.tqdm(train_iterator)):
+            train_on_batch(encoder=encoding_network,
+                           decoder=decoding_network,
+                           inputs=inputs,
+                           targets=targets,
+                           loss_fn=loss_fn,
+                           optimizer=optimizer,
+                           latent_dim=args.latent_dim,
+                           tau_p=args.tau_p,
+                           tau_f=args.tau_f,
+                           device=args.device,
+                           online=args.online,
+                           beta=args.beta)
         scheduler.step()
 
         if (epoch + 1) % args.test_period == 0:
             test_acc, encoder_outputs, decoder_outputs = test(encoder=encoding_network,
                                                               decoder=decoding_network,
-                                                              test_dls=[test_dl],
+                                                              test_dls=test_dls,
                                                               true_frames=test_dataset.true_frames,
                                                               mode=args.mode,
                                                               latent_dim=args.latent_dim,
                                                               tau_p=args.tau_p,
                                                               tau_f=args.tau_f,
                                                               loss_fn=loss_fn,
-                                                              device=args.device)
+                                                              device=args.device,
+                                                              sess_ids=[0] * len(test_dls))
             best_test_acc = save_results(args.results_path, test_acc, best_test_acc, encoder_outputs,
                                          decoder_outputs, encoding_network, decoding_network)
 

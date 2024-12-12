@@ -166,55 +166,57 @@ def test(encoder: torch.nn.Module,
 
     test_acc = 0
 
-    test_iterator = LongCycler(test_dls)
+    test_iterators = [iter(test_dl) for test_dl in test_dls]
     sess_ids = kwargs.get('sess_ids', np.arange(len(test_dls)))
 
-    for i, (inputs, targets) in enumerate(test_iterator):
-        if mode == 'prediction':
-            (acc_batch,
-             encoder_outputs_batch,
-             decoder_outputs_batch) = test_on_batch_allen_movies_prediction(encoder=encoder,
-                                                                            decoder=decoder,
-                                                                            inputs=inputs,
-                                                                            targets=targets,
-                                                                            latent_dim=latent_dim,
-                                                                            tau_p=tau_p,
-                                                                            device=device,
-                                                                            sess_id=sess_ids[i])
-            test_acc += acc_batch / np.sum([len(test_dl) for test_dl in test_dls])
-
-        elif mode == 'reconstruction':
-            (loss_batch,
-             encoder_outputs_batch,
-             decoder_outputs_batch) = test_on_batch_allen_movies_reconstruction(encoder=encoder,
+    for i, test_iterator in enumerate(test_iterators):
+        for inputs, targets in test_iterator:
+            if mode == 'prediction':
+                (acc_batch,
+                encoder_outputs_batch,
+                decoder_outputs_batch) = test_on_batch_allen_movies_prediction(encoder=encoder,
                                                                                 decoder=decoder,
                                                                                 inputs=inputs,
                                                                                 targets=targets,
-                                                                                true_frames=true_frames,
                                                                                 latent_dim=latent_dim,
                                                                                 tau_p=tau_p,
-                                                                                tau_f=tau_f,
-                                                                                loss_fn=loss_fn,
                                                                                 device=device,
                                                                                 sess_id=sess_ids[i])
-            test_acc -= loss_batch.cpu() / np.sum([len(test_dl) for test_dl in test_dls])
+                test_acc += acc_batch / np.sum([len(test_dl) for test_dl in test_dls])
 
-        elif mode == 'unsupervised':
-            loss_batch, encoder_outputs_batch, decoder_outputs_batch = test_on_batch(encoder=encoder,
-                                                                                     decoder=decoder,
-                                                                                     inputs=inputs,
-                                                                                     targets=inputs,
-                                                                                     latent_dim=latent_dim,
-                                                                                     tau_p=tau_p,
-                                                                                     tau_f=tau_f,
-                                                                                     loss_fn=loss_fn,
-                                                                                     device=device,
-                                                                                     act=torch.sigmoid)
-            test_acc -= loss_batch.cpu() / np.sum([len(test_dl) for test_dl in test_dls])
-        else:
-            raise NotImplementedError
+            elif mode == 'reconstruction':
+                (loss_batch,
+                encoder_outputs_batch,
+                decoder_outputs_batch) = test_on_batch_allen_movies_reconstruction(encoder=encoder,
+                                                                                    decoder=decoder,
+                                                                                    inputs=inputs,
+                                                                                    targets=targets,
+                                                                                    true_frames=true_frames,
+                                                                                    latent_dim=latent_dim,
+                                                                                    tau_p=tau_p,
+                                                                                    tau_f=tau_f,
+                                                                                    loss_fn=loss_fn,
+                                                                                    device=device,
+                                                                                    sess_id=sess_ids[i])
+                test_acc -= loss_batch.cpu() / np.sum([len(test_dl) for test_dl in test_dls])
 
-        encoder_outputs = torch.cat((encoder_outputs, encoder_outputs_batch), dim=0)
-        decoder_outputs = torch.cat((decoder_outputs, decoder_outputs_batch), dim=0)
+            elif mode == 'unsupervised':
+                loss_batch, encoder_outputs_batch, decoder_outputs_batch = test_on_batch(encoder=encoder,
+                                                                                        decoder=decoder,
+                                                                                        inputs=inputs,
+                                                                                        targets=inputs,
+                                                                                        latent_dim=latent_dim,
+                                                                                        tau_p=tau_p,
+                                                                                        tau_f=tau_f,
+                                                                                        loss_fn=loss_fn,
+                                                                                        device=device,
+                                                                                        sess_id=sess_ids[i],
+                                                                                        act=torch.sigmoid)
+                test_acc -= loss_batch.cpu() / np.sum([len(test_dl) for test_dl in test_dls])
+            else:
+                raise NotImplementedError
+
+            encoder_outputs = torch.cat((encoder_outputs, encoder_outputs_batch), dim=0)
+            decoder_outputs = torch.cat((decoder_outputs, decoder_outputs_batch), dim=0)
 
     return test_acc, encoder_outputs, decoder_outputs

@@ -7,7 +7,6 @@ import torch.nn as nn
 
 def get_decoder(output_dim_per_session: Any,
                 args: Any,
-                n_neurons: Any = None,
                 id_per_sess: Any = None,
                 softmax: bool = False,
                 **kwargs):
@@ -27,31 +26,32 @@ def get_decoder(output_dim_per_session: Any,
                       softmax=softmax).to(args.device)
     elif args.dec_type == 'mlp-tiny':
         return mlp(in_dim=n_inputs_decoder,
-                   hid_features=[n_neurons // 32, n_neurons // 16],
+                   hid_features=[np.max(output_dim_per_session) // 32, np.max(output_dim_per_session) // 16],
                    output_dim_per_session=output_dim_per_session,
                    id_per_sess=id_per_sess,
                    softmax=softmax).to(args.device)
     elif args.dec_type == 'mlp-small':
         return mlp(in_dim=n_inputs_decoder,
-                   hid_features=[n_neurons // 32, n_neurons // 16],
+                   hid_features=[np.max(output_dim_per_session) // 64, np.max(output_dim_per_session) // 32],
                    output_dim_per_session=output_dim_per_session,
                    id_per_sess=id_per_sess,
                    softmax=softmax).to(args.device)
     elif args.dec_type == 'mlp-medium':
         return mlp(in_dim=n_inputs_decoder,
-                   hid_features=[n_neurons // 32, n_neurons // 16],
+                   hid_features=[np.max(output_dim_per_session) // 128, np.max(output_dim_per_session) // 64],
                    output_dim_per_session=output_dim_per_session,
                    id_per_sess=id_per_sess,
                    softmax=softmax).to(args.device)
     elif args.dec_type == 'mlp-large':
         return mlp(in_dim=n_inputs_decoder,
-                   hid_features=[n_neurons // 32, n_neurons // 16],
+                   hid_features=[np.max(output_dim_per_session) // 256, np.max(output_dim_per_session) // 128],
                    output_dim_per_session=output_dim_per_session,
                    id_per_sess=id_per_sess,
                    softmax=softmax).to(args.device)
     elif args.dec_type == 'mlp-xlarge':
         return mlp(in_dim=n_inputs_decoder,
-                   hid_features=[n_neurons // 32, n_neurons // 16],
+                   hid_features=[np.max(output_dim_per_session) // 512, 
+                                 np.max(output_dim_per_session) // 256],
                    output_dim_per_session=output_dim_per_session,
                    id_per_sess=id_per_sess,
                    softmax=softmax).to(args.device)

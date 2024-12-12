@@ -45,19 +45,18 @@ if __name__ == "__main__":
     parser.add_argument('--num_examples_train', type=int, default=30, help='Number of training example')
     parser.add_argument('--num_examples_test', type=int, default=10, help='Number of test example')
     parser.add_argument('--dt', type=float, default=0.001, help='time bins period')
-    parser.add_argument('--neuron_type', type=str, default='VISp',
-                        choices=['VISp', 'VISal', 'VISrl', 'VISpm', 'VISam', 'VISl'])
     parser.add_argument('--seed', type=int, default=None, help='random seed for reproducibility')
 
     args = parser.parse_args()
 
     make_res_folder('allen_gratings_pseudomouse_' + args.target_type, os.getcwd(), args)
 
+    neuron_types = ['VISp', 'VISal', 'VISrl', 'VISpm', 'VISam', 'VISl']
     (train_dataset, train_dl,
      test_dataset, test_dl) = make_gratings_dataset(os.path.join(args.home, "datasets/allen_visual/"),
                                                     n_neurons=args.n_neurons,
                                                     dt=args.dt,
-                                                    neuron_type=args.neuron_type,
+                                                    neuron_types=neuron_types,
                                                     num_examples_train=args.num_examples_train,
                                                     num_examples_test=args.num_examples_test,
                                                     batch_size=args.batch_size,
