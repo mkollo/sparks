@@ -3,7 +3,7 @@ requires = ["setuptools", "setuptools-scm"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "sparks-ai"
+name = "sparks"
 version = "0.1.1"
 authors = [
   { name="Nicolas Skatchkovsky", email="nicolas.skatchkovsky@crick.ac.uk" },
@@ -28,6 +28,9 @@ dependencies = ["scikit-learn",
     "tqdm",
     "matplotlib",
     "numpy"]
+
+[tool.setuptools]
+packages = ["sparks"]
 
 [tool.setuptools.packages]
 find = {}
