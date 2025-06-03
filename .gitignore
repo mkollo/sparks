@@ -17,3 +17,6 @@ __pycache__/
 .pypirc
 dist/
 .vscode/settings.json
+build
+build/*
+build/**/*

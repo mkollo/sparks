@@ -74,6 +74,9 @@ class HebbianAttentionLayer(torch.nn.Module):
             self.pre_tau_s = None
             self.post_tau_s = None
             self.init_latent_weights(w_pre, w_post)
+            
+            # Initialize traces as tensors instead of None to prevent runtime errors
+            self._initialize_traces()
 
         self.v_proj = torch.nn.Linear(self.n_total_neurons, self.embed_dim)
 
@@ -163,6 +166,21 @@ class HebbianAttentionLayer(torch.nn.Module):
 
         self.pre_tau_s = Parameter(torch.ones(1, len(self.neurons), self.n_total_neurons) * np.log(self.tau_s))
         self.post_tau_s = Parameter(torch.ones(1, len(self.neurons), self.n_total_neurons) * np.log(self.tau_s))
+
+    def _initialize_traces(self):
+        """
+        Initialize trace tensors to prevent None errors during forward pass.
+        This method ensures that pre_trace, post_trace, and attention are properly
+        initialized as zero tensors with the correct dimensions.
+        """
+        # Initialize traces with proper dimensions for ephys data
+        trace_shape = (1, len(self.neurons), self.n_total_neurons)
+        attention_shape = (self.n_total_neurons, self.n_total_neurons)
+        
+        # Create zero tensors as initial state - use register_buffer to handle device movement
+        self.register_buffer('pre_trace', torch.zeros(trace_shape))
+        self.register_buffer('post_trace', torch.zeros(trace_shape))
+        self.register_buffer('attention', torch.zeros(attention_shape))
 
     def detach_(self):
         """
