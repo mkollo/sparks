@@ -10,7 +10,6 @@ from matplotlib import pyplot as plt
 from PIL import Image
 from tqdm.auto import trange
 
-from sparks.utils.train import train
 from sparks.utils.vae import skip, ae_forward
 from sparks.utils.misc import identity
 
@@ -29,12 +28,15 @@ class SparksTrainer:
         self.use_ddp = (local_rank is not None and local_rank >= 0 and self._is_distributed())
         
         if torch.cuda.device_count() > 1 and dist.is_initialized():
-            self.encoder = DDP(encoder.to(self.device), device_ids=[self.local_rank])
-            self.decoder = DDP(decoder.to(self.device), device_ids=[self.local_rank])
+            self.encoder = DDP(encoder.to(self.device), device_ids=[self.local_rank], find_unused_parameters=True)
+            self.decoder = DDP(decoder.to(self.device), device_ids=[self.local_rank], find_unused_parameters=True)
         else:
             self.encoder = encoder.to(self.device)
             self.decoder = decoder.to(self.device)
-        
+            
+        if isinstance(encoder, torch.nn.parallel.DistributedDataParallel):
+            encoder.reparametrize = encoder.module.reparametrize
+            
         self.latent_dim = latent_dim
         self.tau_p = tau_p
         self.tau_f = tau_f
@@ -67,8 +69,9 @@ class SparksTrainer:
         return dist.is_available() and dist.is_initialized()
 
     def save_models(self, epoch):
-        torch.save(self.encoder.state_dict(), os.path.join(self.out_folder, f"encoder_epoch_{epoch}.pth"))
-        torch.save(self.decoder.state_dict(), os.path.join(self.out_folder, f"decoder_epoch_{epoch}.pth"))
+        if not self.use_ddp or dist.get_rank() == 0:
+            torch.save(self.encoder.state_dict(), os.path.join(self.out_folder, f"encoder_epoch_{epoch}.pth"))
+            torch.save(self.decoder.state_dict(), os.path.join(self.out_folder, f"decoder_epoch_{epoch}.pth"))
 
     def evaluate(self, dependent_keys):
         from sparks.utils.test import test
@@ -137,24 +140,46 @@ class SparksTrainer:
             plt.close(fig)
 
     def fit(self, n_epochs, beta=0.001, dependent_keys=None):
-        for epoch in trange(n_epochs, desc="Training Epochs"):
+        encoder = self.encoder
+        decoder = self.decoder
+        loss_fn = self.loss_fn
+        optimizer = self.optimizer
+        device = self.device
+        tau_p = self.tau_p
+        tau_f = self.tau_f
+        train_loader = self.train_loader
+
+        for epoch in trange(n_epochs, desc="Training Epochs", disable=not self._is_main()):
             if self.train_sampler is not None:
                 self.train_sampler.set_epoch(epoch)
-            train(
-                encoder=self.encoder,
-                decoder=self.decoder,
-                train_dls=[self.train_loader],
-                loss_fn=self.loss_fn,
-                optimizer=self.optimizer,
-                latent_dim=self.latent_dim,
-                tau_p=self.tau_p,
-                tau_f=self.tau_f,
-                beta=beta,
-                device=self.device,
-            )
+
+            encoder.train()
+            decoder.train()
+            total_loss = 0
+
+            for inputs, targets in train_loader:
+                inputs, targets = skip(encoder, inputs, targets, device)
+                encoder_outputs = torch.zeros(inputs.size(0), self.latent_dim, tau_p, device=device)
+
+                optimizer.zero_grad()
+                for t in range(inputs.shape[-1]):
+                    encoder_outputs, decoder_outputs, _, _ = ae_forward(
+                        encoder, decoder, inputs[..., t], encoder_outputs, tau_p, device
+                    )
+                    if t < inputs.shape[-1] - tau_f + 1:
+                        target = targets[..., t:t + tau_f].reshape(targets.shape[0], -1)
+                        loss = loss_fn(decoder_outputs, target)
+                        loss.backward()
+                        total_loss += loss.item()
+                optimizer.step()
+
             test_loss, per_feature_acc, _ = self.evaluate(dependent_keys)
             self.log_and_plot(epoch, test_loss, per_feature_acc, dependent_keys)
 
-        print(f"\n✅ Training complete. Log saved to {self.log_path}, GIF saved to {self.gif_path}")
+        if self._is_main():
+            print(f"\n✅ Training complete. Log saved to {self.log_path}, GIF saved to {self.gif_path}")
         if self.use_ddp:
             dist.destroy_process_group()
+
+    def _is_main(self):
+        return not self.use_ddp or dist.get_rank() == 0

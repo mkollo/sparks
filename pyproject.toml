@@ -32,9 +32,6 @@ dependencies = ["scikit-learn",
 [tool.setuptools]
 packages = ["sparks"]
 
-[tool.setuptools.packages]
-find = {}
-
 [project.urls]
 Homepage = "https://github.com/FrancisCrickInstitute/SPARKS"
 Issues = "https://github.com/FrancisCrickInstitute/SPARKS/issues"
