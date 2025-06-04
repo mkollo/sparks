@@ -56,7 +56,8 @@ class HebbianAttentionLayer(torch.nn.Module):
             self.neurons = neurons
 
         self.embed_dim = embed_dim
-        self.attention = None
+        # Don't set attention to None - it will be initialized as a buffer
+        # self.attention = None
 
         if data_type not in ['ephys', 'calcium']:
             raise NotImplementedError('data_type must be one of ["ephys", "calcium"]')
@@ -66,8 +67,9 @@ class HebbianAttentionLayer(torch.nn.Module):
             self.dt = dt
             self.tau_s = tau_s
 
-            self.pre_trace = None
-            self.post_trace = None
+            # Don't set these to None - they'll be initialized as buffers
+            # self.pre_trace = None
+            # self.post_trace = None
 
             self.latent_pre_weight = None
             self.latent_post_weight = None
@@ -77,6 +79,10 @@ class HebbianAttentionLayer(torch.nn.Module):
             
             # Initialize traces as tensors instead of None to prevent runtime errors
             self._initialize_traces()
+        else:
+            # For calcium data, we still need to initialize attention
+            attention_shape = (self.n_total_neurons, self.n_total_neurons)
+            self.register_buffer('attention', torch.zeros(attention_shape))
 
         self.v_proj = torch.nn.Linear(self.n_total_neurons, self.embed_dim)
 
@@ -178,9 +184,13 @@ class HebbianAttentionLayer(torch.nn.Module):
         attention_shape = (self.n_total_neurons, self.n_total_neurons)
         
         # Create zero tensors as initial state - use register_buffer to handle device movement
-        self.register_buffer('pre_trace', torch.zeros(trace_shape))
-        self.register_buffer('post_trace', torch.zeros(trace_shape))
-        self.register_buffer('attention', torch.zeros(attention_shape))
+        # Only register if not already set
+        if not hasattr(self, 'pre_trace') or self.pre_trace is None:
+            self.register_buffer('pre_trace', torch.zeros(trace_shape))
+        if not hasattr(self, 'post_trace') or self.post_trace is None:
+            self.register_buffer('post_trace', torch.zeros(trace_shape))
+        if not hasattr(self, 'attention') or self.attention is None:
+            self.register_buffer('attention', torch.zeros(attention_shape))
 
     def detach_(self):
         """

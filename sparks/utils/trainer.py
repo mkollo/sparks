@@ -3,7 +3,7 @@ import torch
 import numpy as np
 import pandas as pd
 import torch.distributed as dist
-from torch.utils.data import DataLoader, Dataset, TensorDataset, random_split
+from torch.utils.data import DataLoader, TensorDataset, random_split
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
 from sklearn.metrics import accuracy_score
@@ -12,8 +12,6 @@ from PIL import Image
 from tqdm.auto import trange
 
 from sparks.utils.vae import skip, ae_forward
-from sparks.utils.misc import identity
-
 
 class SparksTrainer:
     def __init__(self, 
@@ -21,7 +19,7 @@ class SparksTrainer:
                  decoder, 
                  train_data, 
                  test_data=None,
-                 latent_dim=None, 
+                 latent_dim=None,
                  tau_p=None, 
                  tau_f=None, 
                  loss_fn=None, 
@@ -72,10 +70,13 @@ class SparksTrainer:
     def setup_environment(self, device, local_rank):
         """Setup the computing environment (CPU, MPS, CUDA, multi-GPU)."""
         # Determine local rank and distributed setup
-        self.local_rank = local_rank or int(os.environ.get("LOCAL_RANK", -1))
+        if local_rank is not None:
+            self.local_rank = int(local_rank)
+        else:
+            self.local_rank = int(os.environ.get("LOCAL_RANK", -1))        
         
         # Initialize distributed training if needed
-        if self.local_rank >= 0 and not dist.is_initialized():
+        if self.local_rank >= 0 and not dist.is_initialized() and local_rank is not None and torch.cuda.is_available():
             dist.init_process_group(backend='nccl')
             torch.cuda.set_device(self.local_rank)
             
@@ -97,8 +98,8 @@ class SparksTrainer:
     def setup_models(self, encoder, decoder):
         """Setup the encoder and decoder models."""
         if self.use_ddp:
-            self.encoder = DDP(encoder.to(self.device), device_ids=[self.local_rank], find_unused_parameters=True)
-            self.decoder = DDP(decoder.to(self.device), device_ids=[self.local_rank], find_unused_parameters=True)
+            self.encoder = DDP(encoder.to(self.device), device_ids=[self.local_rank], find_unused_parameters=False)
+            self.decoder = DDP(decoder.to(self.device), device_ids=[self.local_rank], find_unused_parameters=False)
         else:
             self.encoder = encoder.to(self.device)
             self.decoder = decoder.to(self.device)
@@ -156,7 +157,7 @@ class SparksTrainer:
             sampler=self.train_sampler,
             shuffle=not self.train_sampler,
             pin_memory=True,  # Better GPU transfer performance
-            num_workers=2     # Parallel data loading
+            num_workers=min(4, os.cpu_count()-2)     # Parallel data loading
         )
         
         self.test_loader = DataLoader(
@@ -165,7 +166,7 @@ class SparksTrainer:
             sampler=self.test_sampler,
             shuffle=not self.test_sampler,
             pin_memory=True,
-            num_workers=2
+            num_workers=min(4, os.cpu_count()-2)
         )
 
     def setup_output_directories(self, out_folder):
@@ -198,24 +199,24 @@ class SparksTrainer:
     def save_models(self, epoch):
         """Save model checkpoints."""
         if self._is_main():
-            # Save encoder
+            # Save model
             if isinstance(self.encoder, DDP):
-                torch.save(self.encoder.module.state_dict(), 
-                          os.path.join(self.out_folder, f"encoder_epoch_{epoch}.pth"))
+                torch.save({
+                    'epoch': epoch,
+                    'encoder_state_dict': self.encoder.module.state_dict() if isinstance(self.encoder, DDP) else self.encoder.state_dict(),
+                    'decoder_state_dict': self.decoder.module.state_dict() if isinstance(self.decoder, DDP) else self.decoder.state_dict(),
+                    'optimizer_state_dict': self.optimizer.state_dict(),
+                }, os.path.join(self.out_folder, f"checkpoint_epoch_{epoch}.pth"))
             else:
-                torch.save(self.encoder.state_dict(), 
-                          os.path.join(self.out_folder, f"encoder_epoch_{epoch}.pth"))
+                torch.save({
+                    'epoch': epoch,
+                    'encoder_state_dict': self.encoder.state_dict() if isinstance(self.encoder, DDP) else self.encoder.state_dict(),
+                    'decoder_state_dict': self.decoder.state_dict() if isinstance(self.decoder, DDP) else self.decoder.state_dict(),
+                    'optimizer_state_dict': self.optimizer.state_dict(),
+                }, os.path.join(self.out_folder, f"checkpoint_epoch_{epoch}.pth"))       
             
-            # Save decoder
-            if isinstance(self.decoder, DDP):
-                torch.save(self.decoder.module.state_dict(), 
-                          os.path.join(self.out_folder, f"decoder_epoch_{epoch}.pth"))
-            else:
-                torch.save(self.decoder.state_dict(), 
-                          os.path.join(self.out_folder, f"decoder_epoch_{epoch}.pth"))
-
     @torch.no_grad()
-    def test_on_batch(self, inputs, targets, sess_id=0, burnin=0):
+    def test_on_batch(self, inputs, targets, sess_id=0):
         """
         Test the model on a single batch.
         """
@@ -230,7 +231,7 @@ class SparksTrainer:
         test_loss = 0
         all_decoder_outputs = []
 
-        inputs, targets = skip(self.encoder, inputs, targets, self.device, num_steps=burnin, sess_id=sess_id)
+        inputs, targets = skip(self.encoder, inputs, targets, self.device, num_steps=0, sess_id=sess_id)
         T = inputs.shape[-1]
 
         for t in range(T):
@@ -372,7 +373,7 @@ class SparksTrainer:
                 encoder.train()
                 decoder.train()
                 total_loss = 0
-
+                num_sequences = 0
                 for inputs, targets in train_loader:
                     # Move data to device
                     inputs = inputs.to(device, non_blocking=True)
@@ -382,6 +383,7 @@ class SparksTrainer:
                     encoder_outputs = torch.zeros(inputs.size(0), self.latent_dim, tau_p, device=device)
 
                     optimizer.zero_grad()
+                    batch_loss = 0
                     for t in range(inputs.shape[-1]):
                         encoder_outputs, decoder_outputs, _, _ = ae_forward(
                             encoder, decoder, inputs[..., t], encoder_outputs, tau_p, device, sess_id
@@ -389,17 +391,19 @@ class SparksTrainer:
                         if t < inputs.shape[-1] - tau_f + 1:
                             target = targets[..., t:t + tau_f].reshape(targets.shape[0], -1)
                             loss = loss_fn(decoder_outputs, target)
-                            loss.backward()
-                            total_loss += loss.item()
+                            loss.backward()                            
+                            batch_loss += loss.item()
+                    total_loss += batch_loss
+                    num_sequences += inputs.size(0)
                     optimizer.step()
-
+                avg_loss = total_loss / num_sequences
                 # Synchronize before evaluation
                 if self.use_ddp:
                     dist.barrier()
 
                 # Evaluate and log
                 test_loss, per_feature_acc, _ = self.evaluate(dependent_keys, sess_id)
-                self.log_and_plot(epoch, test_loss, per_feature_acc, dependent_keys)
+                self.log_and_plot(epoch, avg_loss, per_feature_acc, dependent_keys)
 
             if self._is_main():
                 print(f"\n✅ Training complete. Log saved to {self.log_path}, GIF saved to {self.gif_path}")
