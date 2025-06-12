@@ -36,6 +36,8 @@ if __name__ == "__main__":
     parser.add_argument('--tau_p', type=int, default=6, help='Past window size')
     parser.add_argument('--tau_f', type=int, default=1, help='Future window size')
     parser.add_argument('--tau_s', type=float, default=0.5, help='STDP decay')
+    parser.add_argument('--w_pre', type=float, default=0.1, help='')
+    parser.add_argument('--w_post', type=float, default=0.05, help='')
 
     # Data parameters
     parser.add_argument('--n_skip_sessions', type=int, default=0, help='First session to consider')
@@ -111,6 +113,7 @@ if __name__ == "__main__":
             test_acc, encoder_outputs, decoder_outputs = test(encoder=encoding_network,
                                                               decoder=decoding_network,
                                                               test_dls=test_dls,
+                                                              true_frames=test_datasets[0].true_frames,
                                                               mode=args.mode,
                                                               latent_dim=args.latent_dim,
                                                               tau_p=args.tau_p,

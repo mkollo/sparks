@@ -2,6 +2,7 @@ from typing import Any
 
 import numpy as np
 import torch
+import torch.nn as nn
 
 
 def get_decoder(output_dim_per_session: Any,
@@ -16,23 +17,59 @@ def get_decoder(output_dim_per_session: Any,
         id_per_sess = np.arange(len(output_dim_per_session))
 
     n_inputs_decoder = args.latent_dim * args.tau_p
+    hid_features = kwargs.get('hid_features', int(np.mean([n_inputs_decoder, np.mean(output_dim_per_session)])))
+
     if args.dec_type == 'linear':
         return linear(in_dim=n_inputs_decoder,
                       output_dim_per_session=output_dim_per_session,
                       id_per_sess=id_per_sess,
                       softmax=softmax).to(args.device)
+    elif args.dec_type == 'mlp-tiny':
+        return mlp(in_dim=n_inputs_decoder,
+                   hid_features=[np.max(output_dim_per_session) // 32, np.max(output_dim_per_session) // 16],
+                   output_dim_per_session=output_dim_per_session,
+                   id_per_sess=id_per_sess,
+                   softmax=softmax).to(args.device)
+    elif args.dec_type == 'mlp-small':
+        return mlp(in_dim=n_inputs_decoder,
+                   hid_features=[np.max(output_dim_per_session) // 64, np.max(output_dim_per_session) // 32],
+                   output_dim_per_session=output_dim_per_session,
+                   id_per_sess=id_per_sess,
+                   softmax=softmax).to(args.device)
+    elif args.dec_type == 'mlp-medium':
+        return mlp(in_dim=n_inputs_decoder,
+                   hid_features=[np.max(output_dim_per_session) // 128, np.max(output_dim_per_session) // 64],
+                   output_dim_per_session=output_dim_per_session,
+                   id_per_sess=id_per_sess,
+                   softmax=softmax).to(args.device)
+    elif args.dec_type == 'mlp-large':
+        return mlp(in_dim=n_inputs_decoder,
+                   hid_features=[np.max(output_dim_per_session) // 256, np.max(output_dim_per_session) // 128],
+                   output_dim_per_session=output_dim_per_session,
+                   id_per_sess=id_per_sess,
+                   softmax=softmax).to(args.device)
+    elif args.dec_type == 'mlp-xlarge':
+        return mlp(in_dim=n_inputs_decoder,
+                   hid_features=[np.max(output_dim_per_session) // 512, 
+                                 np.max(output_dim_per_session) // 256],
+                   output_dim_per_session=output_dim_per_session,
+                   id_per_sess=id_per_sess,
+                   softmax=softmax).to(args.device)
     elif args.dec_type == 'mlp':
-        hid_features = kwargs.get('hid_features', int(np.mean([n_inputs_decoder, np.mean(output_dim_per_session)])))
         return mlp(in_dim=n_inputs_decoder,
                    hid_features=hid_features,
                    output_dim_per_session=output_dim_per_session,
                    id_per_sess=id_per_sess,
                    softmax=softmax).to(args.device)
+    elif args.dec_type == 'rnn':
+        return rnn(input_size=n_inputs_decoder,
+                   hidden_size=hid_features,
+                   output_size=output_dim_per_session[0]).to(args.device)
     else:
-        raise ValueError("dec_type must be one of: linear, mlp")
+        raise ValueError("dec_type must be one of: linear, mlp, rnn")
 
 
-class mlp(torch.nn.Module):
+class mlp(nn.Module):
     def __init__(self,
                  in_dim: int,
                  hid_features: int,
@@ -72,13 +109,13 @@ class mlp(torch.nn.Module):
             id_per_sess = np.arange(len(output_dim_per_session))
         self.id_per_sess = id_per_sess
 
-        self.layers = torch.nn.ModuleList()
-        self.in_layer = torch.nn.Linear(in_dim, hid_features[0])
+        self.layers = nn.ModuleList()
+        self.in_layer = nn.Linear(in_dim, hid_features[0])
 
         for i in range(len(hid_features) - 1):
-            self.layers.append(torch.nn.Linear(hid_features[i], hid_features[i+1]))
+            self.layers.append(nn.Linear(hid_features[i], hid_features[i+1]))
 
-        self.out = torch.nn.ModuleList([torch.nn.Linear(hid_features[-1], out_features)
+        self.out = nn.ModuleList([nn.Linear(hid_features[-1], out_features)
                                         for out_features in output_dim_per_session])
         self.softmax = softmax
 
@@ -88,9 +125,9 @@ class mlp(torch.nn.Module):
         else:
             out_layer_idx = 0
 
-        x = torch.nn.functional.relu(self.in_layer(x.flatten(1)))
+        x = nn.functional.relu(self.in_layer(x.flatten(1)))
         for layer in self.layers:
-            x = torch.nn.functional.relu(layer(x))
+            x = nn.functional.relu(layer(x))
 
         if self.softmax:
             return torch.log_softmax(self.out[out_layer_idx](x), dim=-1)
@@ -98,7 +135,7 @@ class mlp(torch.nn.Module):
             return self.out[out_layer_idx](x)
 
 
-class linear(torch.nn.Module):
+class linear(nn.Module):
     def __init__(self, in_dim: int,
                  output_dim_per_session: Any,
                  id_per_sess: Any = None,
@@ -129,7 +166,7 @@ class linear(torch.nn.Module):
             id_per_sess = np.arange(len(output_dim_per_session))
         self.id_per_sess = id_per_sess
 
-        self.fc1 = torch.nn.ModuleList([torch.nn.Linear(in_dim, out_features)
+        self.fc1 = nn.ModuleList([nn.Linear(in_dim, out_features)
                                         for out_features in output_dim_per_session])
         self.softmax = softmax
 
@@ -141,3 +178,26 @@ class linear(torch.nn.Module):
             return torch.log_softmax(z, dim=-1)
         else:
             return z
+
+
+class rnn(nn.Module):
+    def __init__(self, input_size, hidden_size, output_size):
+        super(rnn, self).__init__()
+
+        self.hidden_size = hidden_size
+        self.hidden = None
+
+        self.i2h = nn.Linear(input_size, hidden_size)
+        self.h2h = nn.Linear(hidden_size, hidden_size)
+        self.h2o = nn.Linear(hidden_size, output_size)
+
+    def forward(self, x_t, sess_id=None):
+        if self.hidden is None:
+            self.hidden = torch.zeros([len(x_t), self.hidden_size]).to(x_t.device)
+        
+        self.hidden = self.i2h(x_t.flatten(1)) + self.h2h(self.hidden)
+        output = self.h2o(self.hidden)
+        return output
+
+    def init(self):
+        self.hidden = None

@@ -22,7 +22,7 @@ if __name__ == "__main__":
     parser.add_argument('--n_epochs', type=int, default=200, help='Number of training epochs')
     parser.add_argument('--test_period', type=int, default=5, help='Test period in number of epochs')
     parser.add_argument('--lr', type=float, default=0.001, help='Learning rate')
-    parser.add_argument('--beta', type=float, default=0.001, help='KLD regularisation')
+    parser.add_argument('--beta', type=float, default=0.0001, help='KLD regularisation')
     parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
     parser.add_argument('--num_workers', type=int, default=0, help='For dataloading')
     parser.add_argument('--online', action='store_true', default=False,
@@ -31,7 +31,7 @@ if __name__ == "__main__":
     # Encoder parameters
     parser.add_argument('--latent_dim', type=int, default=3, help='Size of the latent space')
     parser.add_argument('--n_heads', type=int, default=1, help='Number of attention heads')
-    parser.add_argument('--embed_dim', type=int, default=32, help='Size of attention embeddings')
+    parser.add_argument('--embed_dim', type=int, default=64, help='Size of attention embeddings')
     parser.add_argument('--n_layers', type=int, default=0, help='Number of conventional attention layers')
     parser.add_argument('--dec_type', type=str, default='mlp', choices=['linear', 'mlp'],
                         help='Type of decoder (one of linear or mlp)')
@@ -40,8 +40,6 @@ if __name__ == "__main__":
     parser.add_argument('--tau_s', type=float, default=0.5, help='STDP decay')
 
     # Data parameters
-    parser.add_argument('--p_train', type=float, default=0.8,
-                        help='Proportion of examples to use for training')
     parser.add_argument('--target_type', type=str, default='hand_pos', choices=['hand_pos', 'hand_vel',
                                                                                 'force', 'muscle_len', 'direction'])
     parser.add_argument('--mode', type=str, default='prediction', choices=['prediction', 'unsupervised'],
@@ -60,8 +58,7 @@ if __name__ == "__main__":
      train_dl, test_dl) = make_monkey_reaching_dataset(os.path.join(args.home, "datasets/000127/sub-Han/"),
                                                        mode=args.mode,
                                                        y_keys=args.target_type,
-                                                       batch_size=args.batch_size,
-                                                       p_train=args.p_train)
+                                                       batch_size=args.batch_size)
 
     # Make networks
     encoding_network = HebbianTransformerEncoder(n_neurons_per_sess=train_dataset.x_shape,
@@ -69,7 +66,9 @@ if __name__ == "__main__":
                                                  latent_dim=args.latent_dim,
                                                  tau_s_per_sess=args.tau_s,
                                                  dt_per_sess=args.dt,
-                                                 n_layers=args.n_layers).to(args.device)
+                                                 n_layers=args.n_layers,
+                                                 w_pre=0.1,
+                                                 w_post=0.05).to(args.device)
 
     if args.mode == 'prediction':
         if args.target_type == 'direction':
@@ -82,10 +81,14 @@ if __name__ == "__main__":
         raise NotImplementedError
 
     decoding_network = get_decoder(output_dim_per_session=output_size * args.tau_f,
-                                   args=args, softmax=True if args.target_type == 'direction' else False)
+                                   args=args, softmax=True if args.target_type == 'direction' else False,
+                                   hid_features=[args.latent_dim * args.tau_p * 2,
+                                                 args.latent_dim * args.tau_p,
+                                                 int(args.latent_dim * args.tau_p / 2)])
 
     optimizer = torch.optim.Adam(list(encoding_network.parameters())
                                  + list(decoding_network.parameters()), lr=args.lr)
+
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=100, gamma=0.5)
 
     if args.target_type == 'direction':
@@ -111,7 +114,7 @@ if __name__ == "__main__":
         if (epoch + 1) % args.test_period == 0:
             test_loss, encoder_outputs, decoder_outputs = test(encoding_network,
                                                                decoding_network,
-                                                               test_dl,
+                                                               [test_dl],
                                                                latent_dim=args.latent_dim,
                                                                tau_p=args.tau_p,
                                                                tau_f=args.tau_f,

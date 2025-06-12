@@ -18,8 +18,8 @@ def get_train_test_indices(block, mode):
             test_indices = np.array([9])
     elif block == 'second':
         if mode == 'unsupervised':
-            train_indices = np.arange(10, 19)
-            test_indices = np.arange(10, 19)
+            train_indices = np.arange(10, 20)
+            test_indices = np.arange(10, 20)
         else:
             train_indices = np.arange(10, 19)
             test_indices = np.array([19])
@@ -52,14 +52,23 @@ def sample_correct_unit_ids(all_units_ids, n_neurons, seed, correct_units_ids=No
     return correct_units_ids
 
 
-def load_preprocessed_spikes(data_dir, neuron_types, stim_type='natural_movie_one', min_snr=1.5):
+def load_preprocessed_spikes(data_dir, neuron_types, stim_type='natural_movie_one', min_snr=1.5, 
+                             n_neurons=1, seed=None, correct_units_ids=None):
     if not hasattr(neuron_types, '__iter__'):
         neuron_types = [neuron_types]
 
-    file = '_'.join([neuron_type + '_' for neuron_type in neuron_types]) + stim_type + '_snr_' + str(min_snr)
-    with open(os.path.join(data_dir, "all_spikes_" + file + '.pickle'), 'rb') as f:
-        all_spikes = pickle.load(f)
-    units_ids = np.load(os.path.join(data_dir, "units_ids_" + file + '.npy'))
+    all_spikes = {}
+    units_ids = []
+        
+    for neuron_type in neuron_types:
+        file = neuron_type + '_' + stim_type + '_snr_' + str(min_snr)
+        with open(os.path.join(data_dir, "all_spikes_" + file + '.pickle'), 'rb') as f:
+            all_spikes.update(pickle.load(f))
+
+        all_units_neuron_type = np.load(os.path.join(data_dir, "units_ids_" + file + '.npy'))
+        units_ids.append(sample_correct_unit_ids(all_units_neuron_type, n_neurons, seed, correct_units_ids))
+
+    units_ids = np.concatenate(units_ids)
 
     return all_spikes, units_ids
 

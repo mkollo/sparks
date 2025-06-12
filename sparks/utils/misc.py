@@ -4,6 +4,7 @@ import json
 import os
 import time
 from typing import List
+import random
 
 import numpy as np
 import torch
@@ -56,6 +57,8 @@ def make_res_folder(name: str, path_to_res: str, args: argparse.Namespace):
 
     if torch.cuda.is_available():
         args.device = torch.device('cuda')
+    elif torch.backends.mps.is_available():
+        args.device = torch.device('mps:0')
     else:
         args.device = torch.device('cpu')
 
@@ -287,6 +290,29 @@ class MultiSessionDataset(torch.utils.data.Dataset):
     def __getitem__(self, i):
         return tuple(d[i] for d in self.datasets)
 
+
+class RandomCycler:
+    """
+    Randomly selects a dataloader and yields its next item.
+    Aware not to select a dataloader that has already been exhausted.
+    """
+
+    def __init__(self, loaders):
+        self.loaders = loaders
+        self.iterators = [iter(loader) for loader in loaders]
+        self.active_loaders = list(range(len(self.loaders)))
+
+    def __iter__(self):
+        while self.active_loaders:
+            loader_idx = random.choice(self.active_loaders)
+            try:
+                yield loader_idx, next(self.iterators[loader_idx])
+            except StopIteration:
+                self.active_loaders.remove(loader_idx)
+                self.__iter__()
+        
+    def __len__(self):
+        return sum([len(loader) for loader in self.loaders])
 
 """
 =======================================================================================================================
