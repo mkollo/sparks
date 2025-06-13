@@ -28,7 +28,8 @@ class SparksTrainer:
                  batch_size=12, 
                  device=None, 
                  local_rank=None,
-                 test_split=0.2):
+                 test_split=0.2,
+                 online=False):
         """
             encoder: The encoder model
             decoder: The decoder model
@@ -45,6 +46,8 @@ class SparksTrainer:
             device: Device to use (if None, will be automatically detected)
             local_rank: Local rank for distributed training
             test_split: Fraction of data to use for testing if test_data is None and train_data is a tuple
+            online: If True, performs gradient updates at every timestep instead of accumulating across sequence.
+                   This is more memory efficient and biologically plausible but may require learning rate adjustment.
         """
         # Setup device and distributed training
         self.setup_environment(device, local_rank)
@@ -58,6 +61,7 @@ class SparksTrainer:
         self.tau_f = tau_f
         self.loss_fn = loss_fn
         self.optimizer = optimizer
+        self.online = online
 
         # Setup data loaders
         self.setup_data_loaders(train_data, test_data, batch_size, test_split)
@@ -66,6 +70,10 @@ class SparksTrainer:
         self.setup_output_directories(out_folder)
         self.training_log = []
         self.fig_frames = []
+        
+        # Warn about online mode considerations
+        if self.online and self._is_main():
+            print("⚠️  Online mode enabled: Consider reducing learning rate as gradients are updated at every timestep.")
 
     def setup_environment(self, device, local_rank):
         """Setup the computing environment (CPU, MPS, CUDA, multi-GPU)."""
@@ -396,7 +404,9 @@ class SparksTrainer:
                     inputs, targets = skip(encoder, inputs, targets, device, sess_id=sess_id)
                     encoder_outputs = torch.zeros(inputs.size(0), self.latent_dim, tau_p, device=device)
 
-                    optimizer.zero_grad()
+                    if not self.online:
+                        optimizer.zero_grad()
+                    
                     batch_loss = 0
                     for t in range(inputs.shape[-1]):
                         encoder_outputs, decoder_outputs, _, _ = ae_forward(
@@ -405,11 +415,26 @@ class SparksTrainer:
                         if t < inputs.shape[-1] - tau_f + 1:
                             target = targets[..., t:t + tau_f].reshape(targets.shape[0], -1)
                             loss = loss_fn(decoder_outputs, target)
-                            loss.backward()                            
+                            
+                            if self.online:
+                                # Online mode: update weights at every timestep
+                                optimizer.zero_grad()
+                                loss.backward()
+                                optimizer.step()
+                                # Detach from computational graph to save memory
+                                encoder.detach_()
+                                encoder_outputs = encoder_outputs.detach()
+                            else:
+                                # Standard mode: accumulate gradients
+                                loss.backward()
+                            
                             batch_loss += loss.item()
+                    
                     total_loss += batch_loss
                     num_sequences += inputs.size(0)
-                    optimizer.step()
+                    
+                    if not self.online:
+                        optimizer.step()
                 avg_loss = total_loss / num_sequences
                 # Synchronize before evaluation
                 if self.use_ddp:
