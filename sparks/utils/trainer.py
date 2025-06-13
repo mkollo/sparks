@@ -6,7 +6,7 @@ import torch.distributed as dist
 from torch.utils.data import DataLoader, TensorDataset, random_split
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, f1_score
 from matplotlib import pyplot as plt
 from PIL import Image
 from tqdm.auto import trange
@@ -265,7 +265,7 @@ class SparksTrainer:
         test_loss = 0
         all_decoder_outputs = []
 
-        inputs, targets = skip(self.encoder, inputs, targets, self.device, num_steps=0, sess_id=sess_id)
+        inputs, targets, encoder_outputs = skip(self.encoder, encoder_outputs, inputs, targets, self.device, num_steps=0, sess_id=sess_id)
         T = inputs.shape[-1]
 
         for t in range(T):
@@ -301,29 +301,35 @@ class SparksTrainer:
         decoder_outputs = torch.cat(all_decoder_outputs)
         y_true = torch.cat(all_targets, dim=0).numpy()
         
-        # Calculate accuracy
+        # Calculate predictions
         probs = torch.sigmoid(decoder_outputs).numpy()
         y_pred_bin = (probs > 0.5).astype(np.float32)
         y_true_bin = y_true.astype(np.float32)
 
         per_feature_acc = []
-        # Calculate per-feature accuracy
+        per_feature_f1 = []
+        
+        # Calculate per-feature accuracy and F1 scores
         for f in range(y_true.shape[1]):
             try:
-                acc = accuracy_score(
-                    y_true_bin[:, f, :].reshape(-1),
-                    y_pred_bin[:, f, :].reshape(-1)
-                )
+                y_true_f = y_true_bin[:, f, :].reshape(-1)
+                y_pred_f = y_pred_bin[:, f, :].reshape(-1)
+                
+                acc = accuracy_score(y_true_f, y_pred_f)
+                f1 = f1_score(y_true_f, y_pred_f, average='binary', zero_division=0)
+                
                 per_feature_acc.append(acc)
+                per_feature_f1.append(f1)
             except:
                 # Handle case where y_true or y_pred is empty
                 per_feature_acc.append(0.0)
+                per_feature_f1.append(0.0)
         
-        return total_loss.item(), per_feature_acc, y_true.shape[1]
+        return total_loss.item(), per_feature_acc, per_feature_f1, y_true.shape[1]
 
-    def log_and_plot(self, epoch, test_loss, per_feature_acc, dependent_keys):
+    def log_and_plot(self, epoch, train_loss, test_loss, per_feature_acc, per_feature_f1, dependent_keys):
         """
-        Log training progress and create visualizations.        
+        Log training progress and create static training history visualization.        
         """
         if not self._is_main():
             return
@@ -332,54 +338,81 @@ class SparksTrainer:
         if dependent_keys is None:
             dependent_keys = [f"feature_{i}" for i in range(len(per_feature_acc))]
 
-        # Log metrics
+        # Log metrics including F1 scores
         mean_acc = np.mean(per_feature_acc)
-        self.training_log.append({
+        mean_f1 = np.mean(per_feature_f1)
+        
+        log_entry = {
             "epoch": epoch + 1,
+            "train_loss": train_loss,
             "test_loss": test_loss,
             "mean_accuracy": mean_acc,
-            **{f"acc_{dependent_keys[i]}": per_feature_acc[i] for i in range(len(dependent_keys))}
-        })
+            "mean_f1": mean_f1,
+        }
+        
+        # Add per-feature metrics
+        for i, key in enumerate(dependent_keys):
+            log_entry[f"acc_{key}"] = per_feature_acc[i]
+            log_entry[f"f1_{key}"] = per_feature_f1[i]
+            
+        self.training_log.append(log_entry)
 
-        # Create visualizations every 5 epochs
+        # Save models every 5 epochs
         if (epoch + 1) % 5 == 0:
             self.save_models(epoch + 1)
             
-            # Create plots
-            fig, ax = plt.subplots(1, 2, figsize=(12, 4))
-            df = pd.DataFrame(self.training_log)
+        # Create/update training history plot
+        self.create_training_history_plot(dependent_keys)
+        
+        # Save log
+        df = pd.DataFrame(self.training_log)
+        df.to_csv(self.log_path, index=False)
+
+    def create_training_history_plot(self, dependent_keys):
+        """
+        Create a comprehensive training history plot showing loss and F1 scores over time.
+        """
+        if not self._is_main() or len(self.training_log) == 0:
+            return
             
-            # Plot test loss
-            ax[0].plot(df["epoch"], df["test_loss"], label="Test Loss")
-            ax[0].set_title("Test Loss")
-            ax[0].set_xlabel("Epoch")
-            ax[0].set_ylabel("Loss")
-            
-            # Plot per-feature accuracy
-            ax[1].bar(dependent_keys, per_feature_acc)
-            ax[1].set_title(f"Per-feature accuracy (Epoch {epoch+1})")
-            ax[1].set_xticklabels(dependent_keys, rotation=90)
-            ax[1].set_ylim(0, 1.0)
-            
-            plt.tight_layout()
-            
-            # Save figure as frame for GIF
-            fig.canvas.draw()
-            img = np.frombuffer(fig.canvas.tostring_rgb(), dtype='uint8')
-            img = img.reshape(fig.canvas.get_width_height()[::-1] + (3,))
-            self.fig_frames.append(Image.fromarray(img))
-            
-            # Save log and GIF
-            df.to_csv(self.log_path, index=False)
-            if self.fig_frames:
-                self.fig_frames[0].save(
-                    self.gif_path,
-                    save_all=True,
-                    append_images=self.fig_frames[1:],
-                    duration=300,
-                    loop=0
-                )
-            plt.close(fig)
+        df = pd.DataFrame(self.training_log)
+        
+        # Create figure with 2 subplots
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        
+        # Plot 1: Loss curves
+        ax1.plot(df["epoch"], df["train_loss"], 'b-', label="Training Loss", linewidth=2)
+        ax1.plot(df["epoch"], df["test_loss"], 'r-', label="Test Loss", linewidth=2)
+        ax1.set_xlabel("Epoch")
+        ax1.set_ylabel("Loss")
+        ax1.set_title("Training and Test Loss")
+        ax1.legend()
+        ax1.grid(True, alpha=0.3)
+        
+        # Plot 2: F1 scores over time
+        colors = plt.cm.tab10(np.linspace(0, 1, len(dependent_keys)))
+        
+        for i, (key, color) in enumerate(zip(dependent_keys, colors)):
+            f1_col = f"f1_{key}"
+            if f1_col in df.columns:
+                ax2.plot(df["epoch"], df[f1_col], color=color, label=key, linewidth=2, marker='o', markersize=3)
+        
+        # Also plot mean F1
+        ax2.plot(df["epoch"], df["mean_f1"], 'k--', label="Mean F1", linewidth=2, alpha=0.8)
+        
+        ax2.set_xlabel("Epoch")
+        ax2.set_ylabel("F1 Score")
+        ax2.set_title("F1 Scores by Feature")
+        ax2.set_ylim(0, 1.0)
+        ax2.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        # Save as PNG
+        plot_path = os.path.join(self.out_folder, "training_history.png")
+        plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+        plt.close(fig)
 
     def fit(self, n_epochs, beta=0.001, dependent_keys=None, sess_id=0):
         """
@@ -410,8 +443,8 @@ class SparksTrainer:
                 num_sequences = 0
                 for inputs, targets in train_loader:
                     # Note: inputs and targets are already on the correct device via DataLoader collate_fn
-                    inputs, targets = skip(encoder, inputs, targets, device, sess_id=sess_id)
                     encoder_outputs = torch.zeros(inputs.size(0), self.latent_dim, tau_p, device=device)
+                    inputs, targets, encoder_outputs = skip(encoder, encoder_outputs, inputs, targets, device, sess_id=sess_id)
 
                     if not self.online:
                         optimizer.zero_grad()
@@ -455,11 +488,12 @@ class SparksTrainer:
                     dist.barrier()
 
                 # Evaluate and log
-                test_loss, per_feature_acc, _ = self.evaluate(dependent_keys, sess_id)
-                self.log_and_plot(epoch, avg_loss, per_feature_acc, dependent_keys)
+                test_loss, per_feature_acc, per_feature_f1, _ = self.evaluate(dependent_keys, sess_id)
+                self.log_and_plot(epoch, avg_loss, test_loss, per_feature_acc, per_feature_f1, dependent_keys)
 
             if self._is_main():
-                print(f"\n✅ Training complete. Log saved to {self.log_path}, GIF saved to {self.gif_path}")
+                plot_path = os.path.join(self.out_folder, "training_history.png")
+                print(f"\n✅ Training complete. Log saved to {self.log_path}, Training history plot saved to {plot_path}")
                 
         finally:
             # Clean up distributed process group
