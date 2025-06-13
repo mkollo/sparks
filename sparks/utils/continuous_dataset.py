@@ -3,7 +3,7 @@ from torch.utils.data import Dataset
 import numpy as np
 
 def create_stratified_temporal_split(X, y, n_test_segments=4, test_split=0.2, 
-                                   sequence_length=1000, tau_f=1):
+                                   chunk_length=1000, tau_f=1):
     """
     Create stratified temporal split with test segments distributed across recording
     to capture temporal non-stationarity while maintaining strict separation.
@@ -13,7 +13,7 @@ def create_stratified_temporal_split(X, y, n_test_segments=4, test_split=0.2,
         y: Target labels tensor [T, N_labels]
         n_test_segments: Number of test segments to distribute across recording
         test_split: Total fraction of data for testing
-        sequence_length: Length of training sequences
+        chunk_length: Length of data chunks for training (how many timesteps per batch)
         tau_f: Future window size
         
     Returns:
@@ -23,7 +23,7 @@ def create_stratified_temporal_split(X, y, n_test_segments=4, test_split=0.2,
     total_length = len(X)
     segment_length = total_length // n_test_segments
     test_segment_size = int(segment_length * test_split)  # Each segment contributes equally
-    buffer_size = sequence_length + tau_f
+    buffer_size = chunk_length + tau_f
     
     test_indices = []
     train_indices = []
@@ -175,7 +175,7 @@ def create_continuous_datasets(X, y, sequence_length=1000, n_test_segments=4,
     
     # Create stratified temporal split
     train_indices, test_indices = create_stratified_temporal_split(
-        X, y, n_test_segments, test_split, sequence_length, tau_f
+        X, y, n_test_segments, test_split, chunk_length=sequence_length, tau_f=tau_f
     )
     
     # Create datasets
