@@ -12,6 +12,7 @@ from PIL import Image
 from tqdm.auto import trange
 
 from sparks.utils.vae import skip, ae_forward
+from sparks.utils.continuous_dataset import compute_masked_loss
 
 class SparksTrainer:
     def __init__(self, 
@@ -29,7 +30,8 @@ class SparksTrainer:
                  device=None, 
                  local_rank=None,
                  test_split=0.2,
-                 online=False):
+                 online=False,
+                 use_masked_loss=False):
         """
             encoder: The encoder model
             decoder: The decoder model
@@ -48,6 +50,8 @@ class SparksTrainer:
             test_split: Fraction of data to use for testing if test_data is None and train_data is a tuple
             online: If True, performs gradient updates at every timestep instead of accumulating across sequence.
                    This is more memory efficient and biologically plausible but may require learning rate adjustment.
+            use_masked_loss: If True, skips timesteps where no labels are active (all targets are 0).
+                           Useful for continuous data training to prevent bias toward inactive states.
         """
         # Setup device and distributed training
         self.setup_environment(device, local_rank)
@@ -62,6 +66,7 @@ class SparksTrainer:
         self.loss_fn = loss_fn
         self.optimizer = optimizer
         self.online = online
+        self.use_masked_loss = use_masked_loss
 
         # Setup data loaders
         self.setup_data_loaders(train_data, test_data, batch_size, test_split)
@@ -414,7 +419,12 @@ class SparksTrainer:
                         )
                         if t < inputs.shape[-1] - tau_f + 1:
                             target = targets[..., t:t + tau_f].reshape(targets.shape[0], -1)
-                            loss = loss_fn(decoder_outputs, target)
+                            
+                            # Use masked loss if enabled (skip timesteps with no active labels)
+                            if self.use_masked_loss:
+                                loss = compute_masked_loss(decoder_outputs, target, loss_fn)
+                            else:
+                                loss = loss_fn(decoder_outputs, target)
                             
                             if self.online:
                                 # Online mode: update weights at every timestep
