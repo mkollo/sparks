@@ -20,6 +20,10 @@ def create_stratified_temporal_split(X, y, n_test_segments=4, test_split=0.2,
         train_indices: List of indices for training data
         test_indices: List of indices for test data
     """
+    # Convert to integers to handle float inputs
+    chunk_length = int(chunk_length)
+    tau_f = int(tau_f)
+    
     total_length = len(X)
     segment_length = total_length // n_test_segments
     test_segment_size = int(segment_length * test_split)  # Each segment contributes equally
@@ -84,11 +88,17 @@ class ContinuousChunkDataset(Dataset):
             tau_p: Past window size (for encoder initialization)
             tau_f: Future window size (for prediction)
         """
+        # Convert to integers to handle float inputs
+        chunk_length = int(chunk_length)
+        stride = int(stride) if stride is not None else max(1, chunk_length // 2)
+        tau_p = int(tau_p)
+        tau_f = int(tau_f)
+        
         # Extract data for specified indices
         self.X = X[indices].float()
         self.y = y[indices].float()
         self.chunk_length = chunk_length
-        self.stride = stride if stride is not None else max(1, chunk_length // 2)
+        self.stride = stride
         self.tau_p = tau_p
         self.tau_f = tau_f
         self.filter_no_labels = filter_no_labels
@@ -109,20 +119,20 @@ class ContinuousChunkDataset(Dataset):
             coverage = len(self.valid_chunks) * self.stride / len(self.X)
             print(f"   • Data coverage: {coverage:.1%}")
     
-    def _find_valid_sequences(self):
-        """Find sequences that meet the label activity criteria."""
+    def _find_valid_chunks(self):
+        """Find chunks that meet the label activity criteria."""
         valid_starts = []
-        max_start = len(self.X) - self.sequence_length - self.tau_f + 1
+        max_start = len(self.X) - self.chunk_length - self.tau_f + 1
         
         if max_start <= 0:
-            print(f"⚠️  Warning: Data too short for sequences of length {self.sequence_length}")
+            print(f"⚠️  Warning: Data too short for chunks of length {self.chunk_length}")
             return valid_starts
         
         for start in range(0, max_start, self.stride):
             if self.filter_no_labels:
-                # Check label activity in this sequence
-                y_seq = self.y[start:start + self.sequence_length]
-                active_timesteps = (y_seq.sum(dim=1) > 0).float().mean()
+                # Check label activity in this chunk
+                y_chunk = self.y[start:start + self.chunk_length]
+                active_timesteps = (y_chunk.sum(dim=1) > 0).float().mean()
                 
                 if active_timesteps >= self.min_label_fraction:
                     valid_starts.append(start)
@@ -132,23 +142,23 @@ class ContinuousChunkDataset(Dataset):
         return valid_starts
     
     def __len__(self):
-        return len(self.valid_sequences)
+        return len(self.valid_chunks)
     
     def __getitem__(self, idx):
-        start_idx = self.valid_sequences[idx]
-        end_idx = start_idx + self.sequence_length
+        start_idx = self.valid_chunks[idx]
+        end_idx = start_idx + self.chunk_length
         
-        # Extract sequence
-        x_seq = self.X[start_idx:end_idx]  # [seq_len, n_neurons]
-        y_seq = self.y[start_idx:end_idx]  # [seq_len, n_labels]
+        # Extract chunk
+        x_chunk = self.X[start_idx:end_idx]  # [chunk_len, n_neurons]
+        y_chunk = self.y[start_idx:end_idx]  # [chunk_len, n_labels]
         
-        # Transpose to match expected format [n_neurons, seq_len] and [n_labels, seq_len]
-        x_seq = x_seq.T  # [n_neurons, seq_len]
-        y_seq = y_seq.T  # [n_labels, seq_len]
+        # Transpose to match expected format [n_neurons, chunk_len] and [n_labels, chunk_len]
+        x_chunk = x_chunk.T  # [n_neurons, chunk_len]
+        y_chunk = y_chunk.T  # [n_labels, chunk_len]
         
-        return x_seq, y_seq
+        return x_chunk, y_chunk
 
-def create_continuous_datasets(X, y, sequence_length=1000, n_test_segments=4, 
+def create_continuous_datasets(X, y, chunk_length=1000, n_test_segments=4, 
                              test_split=0.2, stride=None, min_label_fraction=0.1,
                              tau_p=6, tau_f=1):
     """
@@ -157,11 +167,11 @@ def create_continuous_datasets(X, y, sequence_length=1000, n_test_segments=4,
     Args:
         X: Neural data [T, N_neurons]
         y: Labels [T, N_labels]
-        sequence_length: Length of training sequences
+        chunk_length: Length of data chunks for training
         n_test_segments: Number of test segments distributed across recording
         test_split: Total fraction for test set
-        stride: Step between sequences (default: sequence_length // 2)
-        min_label_fraction: Minimum fraction of timesteps with labels per sequence
+        stride: Step between chunks (default: chunk_length // 2)
+        min_label_fraction: Minimum fraction of timesteps with labels per chunk
         tau_p: Past window size
         tau_f: Future window size
     
@@ -171,22 +181,22 @@ def create_continuous_datasets(X, y, sequence_length=1000, n_test_segments=4,
     print(f"🔄 Creating continuous datasets from data:")
     print(f"   • X shape: {X.shape}")
     print(f"   • y shape: {y.shape}")
-    print(f"   • Sequence length: {sequence_length}")
+    print(f"   • Chunk length: {chunk_length}")
     
     # Create stratified temporal split
     train_indices, test_indices = create_stratified_temporal_split(
-        X, y, n_test_segments, test_split, chunk_length=sequence_length, tau_f=tau_f
+        X, y, n_test_segments, test_split, chunk_length=chunk_length, tau_f=tau_f
     )
     
     # Create datasets
-    train_dataset = ContinuousSequenceDataset(
-        X, y, train_indices, sequence_length, stride, 
+    train_dataset = ContinuousChunkDataset(
+        X, y, train_indices, chunk_length, stride, 
         filter_no_labels=True, min_label_fraction=min_label_fraction,
         tau_p=tau_p, tau_f=tau_f
     )
     
-    test_dataset = ContinuousSequenceDataset(
-        X, y, test_indices, sequence_length, stride,
+    test_dataset = ContinuousChunkDataset(
+        X, y, test_indices, chunk_length, stride,
         filter_no_labels=True, min_label_fraction=min_label_fraction, 
         tau_p=tau_p, tau_f=tau_f
     )

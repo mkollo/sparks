@@ -57,52 +57,27 @@ class HebbianAttentionLayer(torch.nn.Module):
 
         super(HebbianAttentionLayer, self).__init__()
         self.n_total_neurons = n_total_neurons
+        self.embed_dim = embed_dim
 
         if neurons is None:
             self.neurons = np.arange(n_total_neurons)
         else:
             self.neurons = neurons
 
-        self.attention = None
         self.sliding = sliding
         self.window_size = window_size
         self.block_size = block_size
         self.dt = dt
         self.tau_s = tau_s
->>>>>>> upstream/dev
-        self.sliding = sliding
-        self.window_size = window_size
-        self.block_size = block_size
-        self.dt = dt
-        self.tau_s = tau_s
-        # Initialize as buffers in _initialize_traces()
-=======
-        self.attention = None
-        self.sliding = sliding
-        self.window_size = window_size
-        self.block_size = block_size
-        self.dt = dt
-        self.tau_s = tau_s
->>>>>>> upstream/dev
 
-        if data_type == 'ephys':
-            self.pre_trace = None
-            self.post_trace = None
->>>>>>> upstream/dev
+        # Initialize as buffers in _initialize_traces()
         self.data_type = data_type
-        # Initialize traces as buffers in _initialize_traces()
-=======
+        
         if data_type == 'ephys':
-            self.pre_trace = None
-            self.post_trace = None
->>>>>>> upstream/dev
-            self.latent_pre_weight = None
-            self.latent_post_weight = None
-            self.pre_tau_s = None
-            self.post_tau_s = None
+            # Initialize weights first (these are Parameters, not buffers)
             self.init_latent_weights(w_pre, w_post)
             
-            # Initialize traces as tensors instead of None to prevent runtime errors
+            # Initialize traces as buffers (these will be registered in _initialize_traces)
             self._initialize_traces()
         else:
             # For calcium data, we still need to initialize attention
@@ -150,6 +125,11 @@ class HebbianAttentionLayer(torch.nn.Module):
         if self.data_type == 'ephys':
             self.pre_trace_update(pre_spikes)
             self.post_trace_update(post_spikes)
+            
+            # Ensure attention buffer is expanded to match batch size
+            if self.attention.shape[0] != spikes.shape[0]:
+                self.attention = self.attention.expand(spikes.shape[0], -1, -1).contiguous()
+            
             self.attention = (self.attention
                               + (torch.mul(self.pre_trace, post_spikes != 0)
                                  - torch.mul(self.post_trace, pre_spikes != 0)).view(spikes.shape[0], 
@@ -242,18 +222,26 @@ class HebbianAttentionLayer(torch.nn.Module):
         This method ensures that pre_trace, post_trace, and attention are properly
         initialized as zero tensors with the correct dimensions.
         """
-        # Initialize traces with proper dimensions for ephys data
-        trace_shape = (1, len(self.neurons), self.n_total_neurons)
-        attention_shape = (self.n_total_neurons, self.n_total_neurons)
-        
-        # Create zero tensors as initial state - use register_buffer to handle device movement
-        # Only register if not already set
-        if not hasattr(self, 'pre_trace') or self.pre_trace is None:
+        if self.sliding:
+            # For sliding window, traces have different shapes
+            trace_shape = (1, self.n_total_neurons // self.block_size, self.block_size, 1)
+            post_trace_shape = (1, self.n_total_neurons // self.block_size, 1, self.window_size * self.block_size)
+            attention_shape = (1, len(self.neurons), self.window_size * self.block_size)
+            
+            # Register buffers for sliding window
             self.register_buffer('pre_trace', torch.zeros(trace_shape))
-        if not hasattr(self, 'post_trace') or self.post_trace is None:
+            self.register_buffer('post_trace', torch.zeros(post_trace_shape))
+        else:
+            # For standard attention
+            trace_shape = (1, len(self.neurons), self.n_total_neurons)
+            attention_shape = (1, len(self.neurons), self.n_total_neurons)
+            
+            # Register buffers for standard attention
+            self.register_buffer('pre_trace', torch.zeros(trace_shape))
             self.register_buffer('post_trace', torch.zeros(trace_shape))
-        if not hasattr(self, 'attention') or self.attention is None:
-            self.register_buffer('attention', torch.zeros(attention_shape))
+        
+        # Register attention buffer
+        self.register_buffer('attention', torch.zeros(attention_shape))
 
     def detach_(self):
         """
@@ -268,7 +256,7 @@ class HebbianAttentionLayer(torch.nn.Module):
 
         if not hasattr(self.pre_trace, '__iter__'):
             return
-        if self.pre_trace.device == torch.device('mps:0'):  # MPS backend doesn't support .detach_()
+        if self.pre_trace.device == torch.device('mps:0'):  # MPS backend doesn't sfport .detach_()
             self.pre_trace = self.pre_trace.detach()
             self.post_trace = self.post_trace.detach()
             self.attention = self.attention.detach()

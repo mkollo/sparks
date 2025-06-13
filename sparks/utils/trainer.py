@@ -182,13 +182,17 @@ class SparksTrainer:
         collate_fn = self._create_device_collate_fn() if use_device_transfer else None
             
         # Create data loaders with automatic device transfer
+        # Disable multiprocessing when using CUDA to avoid forking issues
+        num_workers = 0 if use_device_transfer else min(4, os.cpu_count()-2)
+        pin_memory = False  # Disable pinned memory to avoid conflicts
+        
         self.train_loader = DataLoader(
             train_dataset, 
             batch_size=batch_size,
             sampler=self.train_sampler,
             shuffle=not self.train_sampler,
-            pin_memory=use_device_transfer,  # Only pin memory if transferring to accelerated device
-            num_workers=min(4, os.cpu_count()-2),
+            pin_memory=pin_memory,
+            num_workers=num_workers,
             collate_fn=collate_fn  # Automatic device transfer
         )
         
@@ -197,8 +201,8 @@ class SparksTrainer:
             batch_size=batch_size,
             sampler=self.test_sampler,
             shuffle=not self.test_sampler,
-            pin_memory=use_device_transfer,
-            num_workers=min(4, os.cpu_count()-2),
+            pin_memory=pin_memory,
+            num_workers=num_workers,
             collate_fn=collate_fn  # Automatic device transfer
         )
 
@@ -436,7 +440,7 @@ class SparksTrainer:
                                 encoder_outputs = encoder_outputs.detach()
                             else:
                                 # Standard mode: accumulate gradients
-                                loss.backward()
+                                loss.backward(retain_graph=True)
                             
                             batch_loss += loss.item()
                     
