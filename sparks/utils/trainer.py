@@ -108,6 +108,20 @@ class SparksTrainer:
         if isinstance(self.encoder, torch.nn.parallel.DistributedDataParallel):
             self.encoder.reparametrize = self.encoder.module.reparametrize
 
+    def _should_use_device_transfer(self):
+        """Determine if we should transfer data to accelerated device (GPU/MPS)"""
+        return self.device.type != 'cpu'
+
+    def _create_device_collate_fn(self):
+        """Create collate function that automatically moves data to device (GPU/MPS)"""
+        def device_collate_fn(batch):
+            inputs, targets = torch.utils.data.dataloader.default_collate(batch)
+            return (
+                inputs.to(self.device, non_blocking=True),
+                targets.to(self.device, non_blocking=True)
+            )
+        return device_collate_fn
+
     def setup_data_loaders(self, train_data, test_data, batch_size, test_split):
         """
         Setup data loaders for training and testing.
@@ -149,15 +163,20 @@ class SparksTrainer:
         else:
             self.train_sampler = None
             self.test_sampler = None
+        
+        # Setup device-aware data loading
+        use_device_transfer = self._should_use_device_transfer()
+        collate_fn = self._create_device_collate_fn() if use_device_transfer else None
             
-        # Create data loaders
+        # Create data loaders with automatic device transfer
         self.train_loader = DataLoader(
             train_dataset, 
             batch_size=batch_size,
             sampler=self.train_sampler,
             shuffle=not self.train_sampler,
-            pin_memory=True,  # Better GPU transfer performance
-            num_workers=min(4, os.cpu_count()-2)     # Parallel data loading
+            pin_memory=use_device_transfer,  # Only pin memory if transferring to accelerated device
+            num_workers=min(4, os.cpu_count()-2),
+            collate_fn=collate_fn  # Automatic device transfer
         )
         
         self.test_loader = DataLoader(
@@ -165,8 +184,9 @@ class SparksTrainer:
             batch_size=batch_size,
             sampler=self.test_sampler,
             shuffle=not self.test_sampler,
-            pin_memory=True,
-            num_workers=min(4, os.cpu_count()-2)
+            pin_memory=use_device_transfer,
+            num_workers=min(4, os.cpu_count()-2),
+            collate_fn=collate_fn  # Automatic device transfer
         )
 
     def setup_output_directories(self, out_folder):
@@ -219,13 +239,10 @@ class SparksTrainer:
     def test_on_batch(self, inputs, targets, sess_id=0):
         """
         Test the model on a single batch.
+        Note: inputs and targets are already on the correct device via DataLoader collate_fn
         """
         self.encoder.eval()
         self.decoder.eval()
-        
-        # Move data to device
-        inputs = inputs.to(self.device, non_blocking=True)
-        targets = targets.to(self.device, non_blocking=True)
         
         encoder_outputs = torch.zeros([len(inputs), self.latent_dim, self.tau_p], device=self.device)
         test_loss = 0
@@ -241,7 +258,7 @@ class SparksTrainer:
             all_decoder_outputs.append(decoder_outputs.unsqueeze(-1))
 
             if self.loss_fn is not None and t < T - self.tau_f + 1:
-                target = targets[..., t:t + self.tau_f].reshape(targets.shape[0], -1).to(self.device)
+                target = targets[..., t:t + self.tau_f].reshape(targets.shape[0], -1)
                 test_loss += self.loss_fn(decoder_outputs, target).cpu() / T
 
         decoder_outputs = torch.cat(all_decoder_outputs, dim=-1)
@@ -375,10 +392,7 @@ class SparksTrainer:
                 total_loss = 0
                 num_sequences = 0
                 for inputs, targets in train_loader:
-                    # Move data to device
-                    inputs = inputs.to(device, non_blocking=True)
-                    targets = targets.to(device, non_blocking=True)
-                    
+                    # Note: inputs and targets are already on the correct device via DataLoader collate_fn
                     inputs, targets = skip(encoder, inputs, targets, device, sess_id=sess_id)
                     encoder_outputs = torch.zeros(inputs.size(0), self.latent_dim, tau_p, device=device)
 
