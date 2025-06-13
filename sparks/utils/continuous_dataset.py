@@ -64,22 +64,22 @@ def create_stratified_temporal_split(X, y, n_test_segments=4, test_split=0.2,
     
     return train_indices, test_indices
 
-class ContinuousSequenceDataset(Dataset):
+class ContinuousChunkDataset(Dataset):
     """
-    Dataset for continuous neural data that creates sequences from specified indices
-    while filtering out sequences with insufficient label activity.
+    Dataset for continuous neural data that creates chunks from specified indices
+    while filtering out chunks with insufficient label activity.
     """
     
-    def __init__(self, X, y, indices, sequence_length, stride=None, 
+    def __init__(self, X, y, indices, chunk_length, stride=None, 
                  filter_no_labels=True, min_label_fraction=0.1, tau_p=6, tau_f=1):
         """
         Args:
             X: Neural data tensor [T, N_neurons] 
             y: Target labels tensor [T, N_labels]
             indices: Specific timestep indices to use (from stratified split)
-            sequence_length: Length of each training sequence
-            stride: Step size between sequences (default: sequence_length // 2)
-            filter_no_labels: Skip sequences with insufficient label activity
+            chunk_length: Length of each data chunk for training
+            stride: Step size between chunks (default: chunk_length // 2)
+            filter_no_labels: Skip chunks with insufficient label activity
             min_label_fraction: Minimum fraction of timesteps with active labels
             tau_p: Past window size (for encoder initialization)
             tau_f: Future window size (for prediction)
@@ -87,26 +87,26 @@ class ContinuousSequenceDataset(Dataset):
         # Extract data for specified indices
         self.X = X[indices].float()
         self.y = y[indices].float()
-        self.sequence_length = sequence_length
-        self.stride = stride if stride is not None else max(1, sequence_length // 2)
+        self.chunk_length = chunk_length
+        self.stride = stride if stride is not None else max(1, chunk_length // 2)
         self.tau_p = tau_p
         self.tau_f = tau_f
         self.filter_no_labels = filter_no_labels
         self.min_label_fraction = min_label_fraction
         
-        print(f"📊 Creating ContinuousSequenceDataset:")
+        print(f"📊 Creating ContinuousChunkDataset:")
         print(f"   • Data shape: X{self.X.shape}, y{self.y.shape}")
-        print(f"   • Sequence length: {sequence_length}")
+        print(f"   • Chunk length: {chunk_length}")
         print(f"   • Stride: {self.stride}")
         print(f"   • Filter no-labels: {filter_no_labels}")
         print(f"   • Min label fraction: {min_label_fraction}")
         
-        # Find valid sequences
-        self.valid_sequences = self._find_valid_sequences()
+        # Find valid chunks
+        self.valid_chunks = self._find_valid_chunks()
         
-        print(f"   • Valid sequences: {len(self.valid_sequences)}")
-        if len(self.valid_sequences) > 0:
-            coverage = len(self.valid_sequences) * self.stride / len(self.X)
+        print(f"   • Valid chunks: {len(self.valid_chunks)}")
+        if len(self.valid_chunks) > 0:
+            coverage = len(self.valid_chunks) * self.stride / len(self.X)
             print(f"   • Data coverage: {coverage:.1%}")
     
     def _find_valid_sequences(self):
