@@ -1,4 +1,4 @@
-from .trainer import SparksTrainer
-from .inference import SparksInference
+# from .trainer import SparksTrainer
+# from .inference import SparksInference
 
-__all__ = ['SparksTrainer', 'SparksInference']
+# __all__ = ['SparksTrainer', 'SparksInference']

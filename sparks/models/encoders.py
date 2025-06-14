@@ -174,7 +174,8 @@ class HebbianTransformerEncoder(nn.Module):
 
         if id_per_sess is None:
             id_per_sess = np.arange(len(n_neurons_per_sess))
-        self.id_per_sess = id_per_sess
+        # Register as buffer so it moves with .to(device)
+        self.register_buffer('id_per_sess', torch.from_numpy(id_per_sess).long())
 
         self.output_type = output_type
         self.share_outputs = share_outputs
@@ -244,7 +245,7 @@ class HebbianTransformerEncoder(nn.Module):
 
         """
 
-        layer_idx = np.where(self.id_per_sess == sess_id)[0][0]
+        layer_idx = torch.where(self.id_per_sess == sess_id)[0][0].item()
         if self.share_outputs:
             output_layer_idx = 0
         else:
